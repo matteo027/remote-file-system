@@ -1,0 +1,26 @@
+# GET
+
+GET http://localhost:3000/api/list
+Content-Type: application/json
+
+{
+  "path": "C:/Users/matte/OneDrive/Desktop"
+}
+
+###
+
+POST http://localhost:3000/api/mkdir/prova-file-system-remoto
+Content-Type: application/json
+
+{
+  "path": "C:/Users/matte/OneDrive/Desktop"
+}
+
+###
+
+DELETE  http://localhost:3000/api/rmdir/prova-file-system-remoto
+Content-Type: application/json
+
+{
+  "path": "C:/Users/matte/OneDrive/Desktop"
+}
