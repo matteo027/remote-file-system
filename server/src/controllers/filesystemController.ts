@@ -21,7 +21,7 @@ export class FileSystemController {
         return content;
     }
     
-    public list = async (req: Request, res: Response) => {
+    public readdir = async (req: Request, res: Response) => {
         const path: string = req.body.path;
         try {
             const files = await fs.readdir(path);
@@ -94,4 +94,20 @@ export class FileSystemController {
             }
         }
     }
+
+    public unlink = async (req: Request, res: Response) => {
+        const path: string = req.body.path;
+        const name: string = req.params.name;
+        try {
+            await fs.rm(`${FS_PATH}/${path}/${name}`);
+            res.status(200).end();
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                res.status(404).json({ error: 'File not found' });
+            } else {
+                res.status(500).json({ error: 'Not possible to remove the file ' + name, details: err });
+            }
+        }
+    }
+
 }
