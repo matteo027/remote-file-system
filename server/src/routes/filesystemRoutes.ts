@@ -14,5 +14,6 @@ export function setRoutes(app: Express) {
     router.delete('/api/directories/:name', filesystemController.rmdir);
 
     router.post('/api/files/:name', filesystemController.create);
+    router.put('/api/files/:name', filesystemController.write);
     router.delete('/api/files/:name', filesystemController.unlink);
 }

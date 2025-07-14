@@ -110,4 +110,22 @@ export class FileSystemController {
         }
     }
 
+    public write = async (req: Request, res: Response) => {
+        const path: string = req.body.path;
+        const name: string = req.params.name;
+        const text: string = req.body.text;
+        try {
+            await fs.writeFile(`${FS_PATH}/${path}/${name}`, text, {flag: "w"}); // tiene conto dei permessi!
+            res.status(200).end();
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                res.status(404).json({ error: 'File not found' });
+            } else if (err.code === 'EACCES') {
+                res.status(403).json({ error: 'Access denied' });
+            } else {
+                res.status(500).json({ error: 'Not possible to write on file ' + name, details: err });
+            }
+        }
+    }
+
 }
