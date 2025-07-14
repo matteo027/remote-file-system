@@ -1,26 +1,26 @@
 # GET
 
-GET http://localhost:3000/api/list
+GET http://localhost:3000/api/directories
 Content-Type: application/json
 
 {
-  "path": "C:/Users/matte/OneDrive/Desktop"
+  "path": "../../../../../../"
 }
 
 ###
 
-POST http://localhost:3000/api/mkdir/prova-file-system-remoto
+POST http://localhost:3000/api/directories/prova-file-system-remoto
 Content-Type: application/json
 
 {
-  "path": "C:/Users/matte/OneDrive/Desktop"
+  "path": "../../../../../../"
 }
 
 ###
 
-DELETE  http://localhost:3000/api/rmdir/prova-file-system-remoto
+DELETE  http://localhost:3000/api/directories/prova-file-system-remoto
 Content-Type: application/json
 
 {
-  "path": "C:/Users/matte/OneDrive/Desktop"
+  "path": "../../../../../../"
 }

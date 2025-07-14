@@ -8,8 +8,8 @@ const filesystemController = new FileSystemController();
 export function setRoutes(app: Express) {
     app.use('/', router);
 
-    router.get('/api/list', filesystemController.list);
+    router.get('/api/directories', filesystemController.list);
 
-    router.post('/api/mkdir/:name', filesystemController.mkdir);
-    router.delete('/api/rmdir/:name', filesystemController.rmdir);
+    router.post('/api/directories/:name', filesystemController.mkdir);
+    router.delete('/api/directories/:name', filesystemController.rmdir);
 }

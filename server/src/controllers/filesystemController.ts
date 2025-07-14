@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { promises as fs } from 'fs';
 
-const FS_PATH = "../../../../../..";
+const FS_PATH = "."; // DA MODIFICARE! E' LA "ROOT" DEL FILE SYSTEM
 
 export class FileSystemController {
     
@@ -10,7 +10,7 @@ export class FileSystemController {
         const files_dirs = await fs.readdir(path, { withFileTypes: true });
         for (const dirent of files_dirs) {
             if (dirent.name === '.' || dirent.name === '..') continue;
-            const fullPath = `${path}/${dirent.name}`;
+            const fullPath = `${FS_PATH}/${path}/${dirent.name}`;
             if (dirent.isDirectory()) {
                 let dir_content = await this.read_dir(fullPath, depth + 1);
                 content.push({ [dirent.name]: dir_content });
@@ -27,7 +27,7 @@ export class FileSystemController {
             const files = await fs.readdir(path);
             const content = await Promise.all(
                 files.map(async (file) => {
-                    const fullPath = `${path}/${file}`;
+                    const fullPath = `${FS_PATH}/${path}/${file}`;
                     const stats = await fs.stat(fullPath);
                     return {
                         name: file,
@@ -48,7 +48,7 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
         try {
-            await fs.mkdir(`${path}/${name}`);
+            await fs.mkdir(`${FS_PATH}/${path}/${name}`);
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'EEXIST') { // Error Exists
@@ -63,6 +63,10 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
         try {
+            const stats = await fs.stat(`${path}/${name}`);
+            if (!stats.isDirectory()) {
+                return res.status(400).json({ error: 'ENOTDIR', message: 'The specified path is not a directory' });
+            }
             await fs.rmdir(`${path}/${name}`, { recursive: true });
             res.status(200).end();
         } catch (err: any) {
