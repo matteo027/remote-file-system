@@ -24,3 +24,11 @@ Content-Type: application/json
 {
   "path": "../../../../../../"
 }
+
+###
+POST  http://localhost:3000/api/files/prova.txt
+Content-Type: application/json
+
+{
+  "path": "../../../../../../"
+}

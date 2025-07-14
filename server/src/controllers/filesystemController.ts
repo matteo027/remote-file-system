@@ -77,4 +77,21 @@ export class FileSystemController {
             }
         }
     }
+
+    public create = async (req: Request, res: Response) => {
+        const path: string = req.body.path;
+        const name: string = req.params.name;
+        try {
+            await fs.writeFile(`${FS_PATH}/${path}/${name}`, "", {flag: "wx"});
+            res.status(200).end();
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                res.status(404).json({ error: 'Folder not found' });
+            } else if (err.code === 'EEXIST') {
+                res.status(400).json({ error: 'File already exists' });
+            } else {
+                res.status(500).json({ error: 'Not possible to create the file ' + name, details: err });
+            }
+        }
+    }
 }
