@@ -94,22 +94,7 @@ export class FileSystemController {
             }
         }
     }
-
-    public unlink = async (req: Request, res: Response) => {
-        const path: string = req.body.path;
-        const name: string = req.params.name;
-        try {
-            await fs.rm(`${FS_PATH}/${path}/${name}`);
-            res.status(200).end();
-        } catch (err: any) {
-            if (err.code === 'ENOENT') {
-                res.status(404).json({ error: 'File not found' });
-            } else {
-                res.status(500).json({ error: 'Not possible to remove the file ' + name, details: err });
-            }
-        }
-    }
-
+    
     public write = async (req: Request, res: Response) => {
         const path: string = req.body.path;
         const name: string = req.params.name;
@@ -127,5 +112,39 @@ export class FileSystemController {
             }
         }
     }
+
+    // restituisce un oggetto che contiene il campo "data", associato al contenuto del file
+    public open = async (req: Request, res: Response) => {
+        const path: string = req.body.path;
+        const name: string = req.params.name;
+        try {
+            const content = await fs.readFile(`${FS_PATH}/${path}/${name}`, {flag: "r"}); // tiene conto dei permessi!
+            res.json({data: content.toString()});
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                res.status(404).json({ error: 'File not found' });
+            } else if (err.code === 'EACCES') {
+                res.status(403).json({ error: 'Access denied' });
+            } else {
+                res.status(500).json({ error: 'Not possible to write on file ' + name, details: err });
+            }
+        }
+    }
+
+    public unlink = async (req: Request, res: Response) => {
+        const path: string = req.body.path;
+        const name: string = req.params.name;
+        try {
+            await fs.rm(`${FS_PATH}/${path}/${name}`);
+            res.status(200).end();
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                res.status(404).json({ error: 'File not found' });
+            } else {
+                res.status(500).json({ error: 'Not possible to remove the file ' + name, details: err });
+            }
+        }
+    }
+    
 
 }

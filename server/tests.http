@@ -43,6 +43,14 @@ Content-Type: application/json
 }
 
 ###
+GET http://localhost:3000/api/files/prova.txt
+Content-Type: application/json
+
+{
+  "path": "../../../../../../"
+}
+
+###
 DELETE   http://localhost:3000/api/files/prova.txt
 Content-Type: application/json
 
