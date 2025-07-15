@@ -119,14 +119,14 @@ export class FileSystemController {
         const name: string = req.params.name;
         try {
             const content = await fs.readFile(`${FS_PATH}/${path}/${name}`, {flag: "r"}); // tiene conto dei permessi!
-            res.json({data: content.toString()});
+            res.status(200).json({data: content.toString()});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to write on file ' + name, details: err });
+                res.status(500).json({ error: 'Not possible to read the file ' + name, details: err });
             }
         }
     }
@@ -142,6 +142,24 @@ export class FileSystemController {
                 res.status(404).json({ error: 'File not found' });
             } else {
                 res.status(500).json({ error: 'Not possible to remove the file ' + name, details: err });
+            }
+        }
+    }
+
+    public rename = async (req: Request, res: Response) => {
+        const path: string = req.body.path;
+        const old_name: string = req.params.name;
+        const new_name: string = req.body.new_name;
+        try {
+            const content = await fs.rename(`${FS_PATH}/${path}/${old_name}`, `${FS_PATH}/${path}/${new_name}`);
+            res.status(200).end();
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                res.status(404).json({ error: 'File not found' });
+            } else if (err.code === 'EACCES') {
+                res.status(403).json({ error: 'Access denied' });
+            } else {
+                res.status(500).json({ error: 'Not possible to rename ' + old_name, details: err });
             }
         }
     }

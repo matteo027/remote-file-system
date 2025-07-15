@@ -57,3 +57,12 @@ Content-Type: application/json
 {
   "path": "../../../../../../"
 }
+
+###
+PUT http://localhost:3000/api/prova.txt
+Content-Type: application/json
+
+{
+  "path": "../../../../../../",
+  "new_name": "prova_modificato.txt"
+}
