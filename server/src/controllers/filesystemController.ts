@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { promises as fs } from 'fs';
+import { promises as fs, Mode } from 'fs';
 
 const FS_PATH = "."; // DA MODIFICARE! E' LA "ROOT" DEL FILE SYSTEM
 
@@ -119,7 +119,7 @@ export class FileSystemController {
         const name: string = req.params.name;
         try {
             const content = await fs.readFile(`${FS_PATH}/${path}/${name}`, {flag: "r"}); // tiene conto dei permessi!
-            res.status(200).json({data: content.toString()});
+            res.json({data: content.toString()});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -164,5 +164,31 @@ export class FileSystemController {
         }
     }
     
+    public setattr = async (req: Request, res: Response) => {
+        const path: string = req.body.path;
+        const name: string = req.params.name;
+        const new_mod: Mode = parseInt(req.body.new_mod);
+
+        if (isNaN(new_mod)) {
+            return res.status(400).json({ error: "Parameter 'mod' is not a valid number" });
+        }
+
+        if (new_mod < 0 || new_mod > 0o777) {
+            return res.status(400).json({ error: "Parameter 'mod' out of range (0-511)" });
+        }
+
+        try {
+            await fs.chmod(`${FS_PATH}/${path}/${name}`, new_mod); // ATTENZIONE: Windows ignora il bit di esecuzione!
+            res.status(200).end();
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                res.status(404).json({ error: 'File not found' });
+            } else if (err.code === 'EACCES') {
+                res.status(403).json({ error: 'Access denied' });
+            } else {
+                res.status(500).json({ error: 'Not possible to change mod of ' + name, details: err });
+            }
+        }
+    }
 
 }

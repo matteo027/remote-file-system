@@ -19,4 +19,5 @@ export function setRoutes(app: Express) {
     router.delete('/api/files/:name', filesystemController.unlink);
 
     router.put('/api/:name', filesystemController.rename); // rename
+    router.put('/api/mod/:name', filesystemController.setattr);
 }
