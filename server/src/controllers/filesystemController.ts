@@ -1,21 +1,22 @@
 import { Request, Response } from 'express';
 import { promises as fs, Mode } from 'fs';
+import path_manipulator from 'path';
 
-const FS_PATH = "."; // DA MODIFICARE! E' LA "ROOT" DEL FILE SYSTEM
+const FS_PATH = path_manipulator.join(__dirname, '..', '..', 'file-system');
 
 export class FileSystemController {
     
     private read_dir = async (path: string, depth = 0): Promise<any[]> => {
         let content = [];
         const files_dirs = await fs.readdir(path, { withFileTypes: true });
-        for (const dirent of files_dirs) {
-            if (dirent.name === '.' || dirent.name === '..') continue;
-            const fullPath = `${FS_PATH}/${path}/${dirent.name}`;
-            if (dirent.isDirectory()) {
+        for (const direct of files_dirs) {
+            if (direct.name === '.' || direct.name === '..') continue;
+            const fullPath = path_manipulator.resolve(FS_PATH, `${path}/${direct.name}`);
+            if (direct.isDirectory()) {
                 let dir_content = await this.read_dir(fullPath, depth + 1);
-                content.push({ [dirent.name]: dir_content });
+                content.push({ [direct.name]: dir_content });
             } else {
-                content.push(dirent.name);
+                content.push(direct.name);
             }
         }
         return content;
@@ -24,10 +25,10 @@ export class FileSystemController {
     public readdir = async (req: Request, res: Response) => {
         const path: string = req.body.path;
         try {
-            const files = await fs.readdir(path);
+            const files = await fs.readdir(path_manipulator.resolve(FS_PATH, `${path}`));
             const content = await Promise.all(
                 files.map(async (file) => {
-                    const fullPath = `${FS_PATH}/${path}/${file}`;
+                    const fullPath = path_manipulator.resolve(FS_PATH, `${path}/${file}`);
                     const stats = await fs.stat(fullPath);
                     return {
                         name: file,
@@ -40,7 +41,7 @@ export class FileSystemController {
             );
             res.json(content);
         } catch (err) {
-            res.status(500).json({ error: 'Not possible to read from the folder ' + path, details: err });
+            res.status(500).json({ error: 'Not possible to read from the folder ' + path_manipulator.resolve(path), details: err });
         }
     }
 
@@ -48,7 +49,7 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
         try {
-            await fs.mkdir(`${FS_PATH}/${path}/${name}`);
+            await fs.mkdir(path_manipulator.resolve(FS_PATH, `${path}/${name}`));
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'EEXIST') { // Error Exists
@@ -63,11 +64,11 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
         try {
-            const stats = await fs.stat(`${path}/${name}`);
+            const stats = await fs.stat(path_manipulator.resolve(FS_PATH, `${path}/${name}`));
             if (!stats.isDirectory()) {
                 return res.status(400).json({ error: 'ENOTDIR', message: 'The specified path is not a directory' });
             }
-            await fs.rmdir(`${path}/${name}`, { recursive: true });
+            await fs.rmdir(path_manipulator.resolve(FS_PATH, `${path}/${name}`), { recursive: true });
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -82,7 +83,7 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
         try {
-            await fs.writeFile(`${FS_PATH}/${path}/${name}`, "", {flag: "wx"});
+            await fs.writeFile(path_manipulator.resolve(FS_PATH, `${path}/${name}`), "", {flag: "wx"});
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -100,7 +101,7 @@ export class FileSystemController {
         const name: string = req.params.name;
         const text: string = req.body.text;
         try {
-            await fs.writeFile(`${FS_PATH}/${path}/${name}`, text, {flag: "w"}); // tiene conto dei permessi!
+            await fs.writeFile(path_manipulator.resolve(FS_PATH, `${path}/${name}`), text, {flag: "w"}); // tiene conto dei permessi!
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -118,7 +119,7 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
         try {
-            const content = await fs.readFile(`${FS_PATH}/${path}/${name}`, {flag: "r"}); // tiene conto dei permessi!
+            const content = await fs.readFile(path_manipulator.resolve(FS_PATH, `${path}/${name}`), {flag: "r"}); // tiene conto dei permessi!
             res.json({data: content.toString()});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -135,7 +136,7 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
         try {
-            await fs.rm(`${FS_PATH}/${path}/${name}`);
+            await fs.rm(path_manipulator.resolve(FS_PATH, `${path}/${name}`));
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -151,7 +152,7 @@ export class FileSystemController {
         const old_name: string = req.params.name;
         const new_name: string = req.body.new_name;
         try {
-            const content = await fs.rename(`${FS_PATH}/${path}/${old_name}`, `${FS_PATH}/${path}/${new_name}`);
+            const content = await fs.rename(path_manipulator.resolve(FS_PATH, `${path}/${old_name}`), path_manipulator.resolve(FS_PATH, `${path}/${new_name}`));
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -178,7 +179,7 @@ export class FileSystemController {
         }
 
         try {
-            await fs.chmod(`${FS_PATH}/${path}/${name}`, new_mod); // ATTENZIONE: Windows ignora il bit di esecuzione!
+            await fs.chmod(path_manipulator.resolve(FS_PATH, `${path}/${name}`), new_mod); // ATTENZIONE: Windows ignora il bit di esecuzione!
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
