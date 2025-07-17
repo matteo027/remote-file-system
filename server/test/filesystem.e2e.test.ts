@@ -16,7 +16,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  //await fs.rm(TEST_DIR, { recursive: true, force: true });
+  await fs.rm(TEST_DIR, { recursive: true, force: true });
 });
 
 describe('File System E2E', () => {
