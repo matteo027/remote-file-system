@@ -20,4 +20,9 @@ export function setRoutes(app: Express) {
 
     router.put('/api/:name', filesystemController.rename); // rename
     router.put('/api/mod/:name', filesystemController.setattr);
+
+    // login
+    router.post('/api/login', filesystemController.login);
+
+    //router.get('/api/user', filesystemController.get);
 }

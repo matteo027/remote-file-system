@@ -10,6 +10,9 @@ export class User {
   @Column()
   password: string;
 
+  @Column()
+  salt: string;
+
   @OneToMany(() => File, (file) => file.owner)
   files: File[];
 

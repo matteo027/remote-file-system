@@ -1,8 +1,13 @@
 import { Request, Response } from 'express';
 import { promises as fs, Mode } from 'fs';
 import path_manipulator from 'path';
+import { AppDataSource } from '../data-source';
+import { User } from '../entities/User';
+import * as crypto from 'crypto';
+import { promisify } from 'util'
 
 const FS_PATH = path_manipulator.join(__dirname, '..', '..', 'file-system');
+const scryptAsync = promisify(crypto.scrypt);
 
 export class FileSystemController {
     
@@ -191,5 +196,23 @@ export class FileSystemController {
             }
         }
     }
+
+
+    // login
+    public login = async (req: Request, res: Response) => {
+        res.json("You are loggedin!!!");
+    }
+
+    public getUser = async (username: string, password: string) => {
+        return new Promise(async (res, rej) => {
+            const user: User | null = await AppDataSource.getRepository(User).findOneBy({ username });
+
+            const hashedPassword = await scryptAsync(password, user?.salt || "", 32) as Buffer;
+
+            if(crypto.timingSafeEqual(Buffer.from(user?.password || "", 'hex'), hashedPassword))
+                res(user);
+            else res(false);
+        })
+    };
 
 }
