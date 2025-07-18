@@ -5,7 +5,7 @@ import { Group } from "./entities/Group";
 
 export const AppDataSource = new DataSource({
   type: "sqlite",
-  database: "mydb.sqlite",
+  database: "metadata.sqlite",
   synchronize: true,
   logging: false,
   entities: [User, File, Group],
