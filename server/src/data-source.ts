@@ -1,0 +1,12 @@
+import { DataSource } from "typeorm";
+import { User } from "./entities/User";
+import { File } from "./entities/File";
+import { Group } from "./entities/Group";
+
+export const AppDataSource = new DataSource({
+  type: "sqlite",
+  database: "mydb.sqlite",
+  synchronize: true,
+  logging: false,
+  entities: [User, File, Group],
+});
