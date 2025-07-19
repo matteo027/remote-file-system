@@ -1,11 +1,11 @@
 import express, { Request } from 'express';
-import { setRoutes } from './routes/filesystemRoutes';
+import { setRoutes as setRoutesFS } from './routes/filesystemRoutes';
+import { setRoutes as setRoutesAuth } from './routes/authenticationRoutes';
 import { AppDataSource } from './data-source';
 import { User as FSUser } from './entities/User';
 import * as passportStrategy from 'passport-local';
 import passport from 'passport';
 import session from 'express-session';
-import { FileSystemController } from './controllers/filesystemController';
 import { Strategy as LocalStrategy } from 'passport-local';
 import cors from 'cors';
 import { AuthenticationController } from './controllers/authenticationController';
@@ -13,11 +13,7 @@ import { AuthenticationController } from './controllers/authenticationController
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(express.json());
-
-// Set up routes
-setRoutes(app);
 
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
@@ -25,8 +21,9 @@ app.listen(PORT, () => {
 
 app.use(passport.initialize());
 
+// session in express
 app.use(session({
-  secret: "",
+  secret: "shh",
   resave: false,
   saveUninitialized: false
 }));
@@ -59,12 +56,17 @@ passport.deserializeUser(async (username: string, done) => {
     done(err);
   }
 });
-
+/*
 const corsOptions = {
-  origin: 'https://localyost:3000',
+  origin: 'https://localhost:3000',
   credentials: true,
 };
 app.use(cors(corsOptions));
+*/
+
+// Set up routes
+setRoutesFS(app);
+setRoutesAuth(app);
 
 // initializing the db
 async function db() {
@@ -81,6 +83,8 @@ async function db() {
         password: "c7be23ada64b3748d4a0aba3604a305535e757f69e5ca67726f013f8303b90fc", // hashed "admin"
         salt: "d610f867285f3cd63aa5ee46e9e1de55"
       });
+      await userRepo.save(admin);
+      
       // creating the admin (user) folder
       await fetch('http://localhost:3000/api/directories/admin', {
         method: 'POST',
@@ -89,8 +93,6 @@ async function db() {
         },
         body: JSON.stringify({ path: '.' }),
       });
-
-      await userRepo.save(admin);
     }
 
   } catch (error) {

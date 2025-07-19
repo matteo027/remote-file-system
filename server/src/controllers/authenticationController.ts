@@ -10,18 +10,16 @@ export class AuthenticationController {
 
     // login
     public login = async (req: Request, res: Response) => {
-        const { username, password } = req.body;
-
-        try {
-            const result = await this.getUser(username, password);
-            if (result) {
-                res.status(200).json({ username: (result as User).username });
-            } else {
-                res.status(401).json({ error: 'Invalid credentials' });
-            }
-        } catch (error) {
-            res.status(500).json({ error: 'Internal server error' });
-        }
+        res.json((req.user as User)?.username);
+    }
+    // logout
+    public logout = async (req: Request, res: Response) => {
+        req.logout(() => {
+            res.end();
+        });
+    }
+    public logged = async (req: Request, res: Response) => {
+        res.json(req.user as User);
     }
 
     public getUser = async (username: string, password: string) => {

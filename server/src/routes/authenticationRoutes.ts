@@ -8,8 +8,11 @@ const router = Router();
 const authenticationController = new AuthenticationController();
 
 export function setRoutes(app: Express) {
-    // login
-    router.post('/api/login', passport.authenticate('local'), authenticationController.login);
 
-    //router.get('/api/user', authenticationController.get);
+    app.use('/', router);
+    
+    router.post('/api/login', passport.authenticate('local'), authenticationController.login);
+    router.post('/api/logout', authenticationController.logout);
+    router.get('/api/me', authenticationController.isLoggedIn, authenticationController.logged);
+    
 }
