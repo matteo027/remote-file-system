@@ -7,6 +7,8 @@ import passport from 'passport';
 import session from 'express-session';
 import { FileSystemController } from './controllers/filesystemController';
 import { Strategy as LocalStrategy } from 'passport-local';
+import cors from 'cors';
+import { AuthenticationController } from './controllers/authenticationController';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -33,7 +35,7 @@ app.use(passport.authenticate('session'));
 passport.use(new LocalStrategy(
   async function verify(username: string, password: string, cb) {
     try {
-      const user = await new FileSystemController().getUser(username, password);
+      const user = await new AuthenticationController().getUser(username, password);
       if (!user) {
         return cb(null, false, { message: "Incorrect username or password." });
       }
@@ -58,6 +60,11 @@ passport.deserializeUser(async (username: string, done) => {
   }
 });
 
+const corsOptions = {
+  origin: 'https://localyost:3000',
+  credentials: true,
+};
+app.use(cors(corsOptions));
 
 // initializing the db
 async function db() {
@@ -71,14 +78,23 @@ async function db() {
     if (!exists) {
       const admin = userRepo.create({
         username: "admin",
-        password: "admin",
+        password: "c7be23ada64b3748d4a0aba3604a305535e757f69e5ca67726f013f8303b90fc", // hashed "admin"
+        salt: "d610f867285f3cd63aa5ee46e9e1de55"
+      });
+      // creating the admin (user) folder
+      await fetch('http://localhost:3000/api/directories/admin', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ path: '.' }),
       });
 
       await userRepo.save(admin);
     }
 
   } catch (error) {
-    console.error("Error during Data Source initialization:", error);
+    console.error("Error during Data Source initialization: ", error);
   }
 }
 
