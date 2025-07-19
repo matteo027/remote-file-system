@@ -29,7 +29,7 @@ export class AuthenticationController {
             const hashedPassword = await scryptAsync(password, user?.salt || "", 32) as Buffer;
 
             if(crypto.timingSafeEqual(Buffer.from(user?.password || "", 'hex'), hashedPassword))
-                res(user);
+                res({ username: user?.username });
             else res(false);
         })
     };

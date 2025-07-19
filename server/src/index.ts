@@ -1,9 +1,8 @@
-import express, { Request } from 'express';
+import express from 'express';
 import { setRoutes as setRoutesFS } from './routes/filesystemRoutes';
 import { setRoutes as setRoutesAuth } from './routes/authenticationRoutes';
 import { AppDataSource } from './data-source';
 import { User as FSUser } from './entities/User';
-import * as passportStrategy from 'passport-local';
 import passport from 'passport';
 import session from 'express-session';
 import { Strategy as LocalStrategy } from 'passport-local';
@@ -43,8 +42,8 @@ passport.use(new LocalStrategy(
 }));
 
 
-passport.serializeUser((user: any, done) => { // it should be FSUser btw
-  done(null, user.username);
+passport.serializeUser((user: any, done) => {
+  done(null, (user as FSUser).username);
 });
 
 
@@ -56,13 +55,13 @@ passport.deserializeUser(async (username: string, done) => {
     done(err);
   }
 });
-/*
+
 const corsOptions = {
   origin: 'https://localhost:3000',
   credentials: true,
 };
 app.use(cors(corsOptions));
-*/
+
 
 // Set up routes
 setRoutesFS(app);
