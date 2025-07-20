@@ -1,0 +1,10 @@
+[package]
+name = "rfs-cliApp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = {version = "4.5.41", features = ["derive"]}
+fuser = "0.15.1"
+rfs-fuse = { version = "0.1.0", path = "../rfs-fuse" }
+rfs-models = { version = "0.1.0", path = "../rfs-models" }
