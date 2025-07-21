@@ -1,6 +1,7 @@
 use rfs_models::{RemoteBackend,DirectoryEntry, BackendError};
 use std::time::SystemTime;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 pub struct StubBackend{
     //test purposes
@@ -18,7 +19,7 @@ impl RemoteBackend for StubBackend {
         dirs.insert("".into(), vec![
         DirectoryEntry::new(2, "file1.txt".into(), false, 1024, 0o644, 1, 0, 0, now(), now(), now()),
         DirectoryEntry::new(3, "file2.txt".into(), false, 2048, 0o644, 1, 0, 0, now(), now(), now()),
-        DirectoryEntry::new(4, "dir1".into(), true,    0,    0o755, 1, 0, 0, now(), now(), now()),
+        DirectoryEntry::new(4, "dir1".into(), true, 0, 0o755, 1, 0, 0, now(), now(), now()),
         ]);
         // dentro /dir1 c'è dir2
         dirs.insert("/dir1".into(), vec![
@@ -44,6 +45,23 @@ impl RemoteBackend for StubBackend {
         self.dirs.entry(parent).or_default().push(entry);
         self.dirs.entry(full).or_insert_with(Vec::new);
         Ok(())
+    }
+
+    fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
+        if self.dirs.remove(path).is_some() {
+            let parent_path = match path.rfind('/') {
+                Some(idx) => &path[..idx],
+                _ => "",
+            };
+            let dir_name = Path::new(path).file_name().unwrap().to_str().unwrap().to_string();
+
+            if let Some(children) = self.dirs.get_mut(parent_path) {
+                children.retain(|entry| entry.name != dir_name);
+            }
+            Ok(())
+        } else {
+            Err(BackendError::NotFound(path.to_string()))
+        }
     }
 
     fn list_dir(&self, path: &str) -> Result<Vec<DirectoryEntry>, BackendError> {

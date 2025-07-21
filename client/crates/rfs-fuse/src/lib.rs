@@ -1,7 +1,7 @@
 use std::{ffi::OsStr, path::{Path,PathBuf}, sync::{Arc,Mutex,atomic::{AtomicU64,Ordering}},time::{Duration,SystemTime}};
-use fuser::{Filesystem, Request, ReplyAttr, ReplyEntry, ReplyDirectory, FileAttr, FileType};
+use fuser::{Filesystem, Request, ReplyAttr, ReplyEntry, ReplyDirectory, FileAttr, FileType, ReplyEmpty};
 use rfs_models::{DirectoryEntry, BackendError, RemoteBackend};
-use libc::{ENOENT, EIO};
+use libc::{ENOENT, EIO, ENOTEMPTY};
 use std::collections::HashMap;
 
 const TTL: Duration = Duration::from_secs(1);
@@ -131,8 +131,8 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
     fn readdir(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64, mut reply: ReplyDirectory) {
        let dir_path ={
             let map = self.state.path_to_ino.lock().unwrap();
-            map.iter().find_map(|(path, &entry_ino)| if entry_ino == ino { Some(path.clone()) } else { None })
-        }.unwrap_or(PathBuf::from(ROOT_PATH));
+            map.iter().find_map(|(path, &entry_ino)| if entry_ino == ino { Some(path.clone()) } else { None }).unwrap_or(PathBuf::from(ROOT_PATH))
+        };
 
         match self.fetch_dir(&dir_path) {
             Ok(children) => {
@@ -192,5 +192,58 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
 
         let attr = Self::entry_to_attr(&new_entry);
         reply.entry(&TTL, &attr, 0);
+    }
+
+    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        let parent_path = {
+            let m = self.state.path_to_ino.lock().unwrap();
+            m.iter()
+             .find_map(|(p,&i)| if i == parent { Some(p.clone()) } else { None })
+             .unwrap_or(PathBuf::from(ROOT_PATH))
+        };
+        let full_path = parent_path.join(name);
+        let path_str = full_path.to_str().unwrap_or("/");
+
+        // 2) verifica se la dir è vuota: fai una list
+        match self.backend.list_dir(path_str) {
+            Ok(children) if !children.is_empty() => {
+                // non vuota → ENOTEMPTY
+                return reply.error(ENOTEMPTY);
+            }
+            Err(BackendError::NotFound(_)) => {
+                // non esiste → ENOENT
+                return reply.error(ENOENT);
+            }
+            Err(_) => {
+                // altro errore backend → EIO
+                return reply.error(EIO);
+            }
+            Ok(_) => {} // directory vuota → prosegui
+        }
+
+        // 3) chiedi al backend di cancellare
+        if let Err(_) = self.backend.delete_dir(path_str) {
+            // se delete_dir fallisce con NotFound => ENOENT, altrimenti EIO
+            return reply.error(ENOENT);
+        }
+
+        // 4) aggiorna le mappe locali
+        
+        // rimuovi entry da ino_to_entries
+        let mut i2e = self.state.ino_to_entries.lock().unwrap();
+        if let Some(entry) = i2e.remove(&self.get_or_allocate_ino(&full_path)) {
+            // rimuovi mapping path→ino
+            self.state.path_to_ino.lock().unwrap().remove(&full_path);
+
+            // ed elimina la voce dal vettore dei figli nel genitore
+            let mut parent_children = self.state.path_to_ino.lock().unwrap();
+            // ma in realtà, se gestisci un cache dei figli, dovrai eliminare entry.name lì
+            // ad esempio se hai un map path->vec figli, va fatto qui
+        } else {
+            return reply.error(ENOENT);
+        }
+    
+        // 5) tutto ok
+        reply.ok();
     }
 }
