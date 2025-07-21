@@ -1,0 +1,7 @@
+[package]
+name = "rfs-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rfs-models = { version = "0.1.0", path = "../rfs-models" }

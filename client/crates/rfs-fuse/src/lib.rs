@@ -97,7 +97,7 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         Ok(())
     }
 
-    fn getattr(&mut self, _req: &Request, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) { //fh serve poi quando si fa read/write
         let map = self.state.ino_to_entries.lock().unwrap();
         if let Some(entry) = map.get(&ino) {
             reply.attr(&TTL, &Self::entry_to_attr(entry));
@@ -106,7 +106,7 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let parent_path = {
             let map = self.state.path_to_ino.lock().unwrap();
             map.iter().find_map(|(path, &entry_ino)| if entry_ino == parent { Some(path.clone()) } else { None })
@@ -156,5 +156,41 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
             }
             Err(_) => reply.error(EIO),
         }
+    }
+
+    fn mkdir(&mut self, req: &Request<'_>, parent: u64, name: &OsStr, mode: u32, umask:u32, reply: ReplyEntry) {
+        let parent_path = {
+            let map = self.state.path_to_ino.lock().unwrap();
+            map.iter().find_map(|(path, &entry_ino)| if entry_ino == parent { Some(path.clone()) } else { None }).unwrap_or(PathBuf::from(ROOT_PATH))
+        };
+
+        let full_path = parent_path.join(name);
+
+        let fmode = mode & !umask; // applico il umask al mode
+        let mut new_entry = DirectoryEntry::new(
+            0, // ino fittizio, lo setto dopo
+            full_path.to_string_lossy().into_owned(),
+            true,
+            0,
+            fmode as u16,
+            1, // nlinks
+            req.uid(), // uid
+            req.gid(), // gid
+            SystemTime::now(),
+            SystemTime::now(),
+            SystemTime::now(),
+        );
+        
+        if let Err(_) = self.backend.create_dir(new_entry.clone()) {
+            reply.error(EIO);
+            return;
+        }
+
+        let ino = self.get_or_allocate_ino(&full_path);
+        new_entry.ino = ino;
+        self.state.ino_to_entries.lock().unwrap().insert(ino, new_entry.clone());
+
+        let attr = Self::entry_to_attr(&new_entry);
+        reply.entry(&TTL, &attr, 0);
     }
 }

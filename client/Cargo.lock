@@ -215,11 +215,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rfs-api"
+version = "0.1.0"
+dependencies = [
+ "rfs-models",
+]
+
+[[package]]
 name = "rfs-cliApp"
 version = "0.1.0"
 dependencies = [
  "clap",
  "fuser",
+ "rfs-api",
  "rfs-fuse",
  "rfs-models",
 ]

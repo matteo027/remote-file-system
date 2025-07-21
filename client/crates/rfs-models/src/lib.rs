@@ -53,5 +53,5 @@ pub trait RemoteBackend:Send + Sync {
     // fn read_file(&self, path: &str) -> Result<Vec<u8>, BackendError>;
     // fn write_file(&self, path: &str, data: &[u8]) -> Result<(), BackendError>;
     // fn delete_file(&self, path: &str) -> Result<(), BackendError>;
-    fn create_dir(&mut self, path: &str) -> Result<(), BackendError>;
+    fn create_dir(&mut self, entry: DirectoryEntry) -> Result<(), BackendError>;
 }
