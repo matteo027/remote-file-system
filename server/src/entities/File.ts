@@ -1,10 +1,14 @@
 import { Entity, Column, PrimaryColumn, ManyToOne, JoinColumn } from "typeorm";
 import { User } from "./User";
+import { Group } from "./Group";
 
 @Entity()
 export class File {
   @PrimaryColumn()
   path: string;
+
+  @Column()
+  name: string;
 
   @ManyToOne(() => User, (user) => user.files)
   @JoinColumn({ name: "owner" })
@@ -14,10 +18,11 @@ export class File {
   type: number; // 0 = file, 1 = directory, 2 = symlink, etc.
 
   @Column()
-  permissions: string;
+  permissions: number;
 
-  @Column()
-  group: string;
+  @ManyToOne(() => Group, (group) => group.groupname)
+  @JoinColumn({ name: "group" })
+  group: Group;
 
   @Column()
   size: number;
