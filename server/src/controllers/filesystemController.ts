@@ -5,6 +5,7 @@ import { AppDataSource } from '../data-source';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import { Group } from '../entities/Group';
+import { AuthenticationController } from './authenticationController';
 
 const FS_PATH = path_manipulator.join(__dirname, '..', '..', 'file-system');
 const fileRepo = AppDataSource.getRepository(File);
@@ -13,28 +14,31 @@ const groupRepo = AppDataSource.getRepository(Group);
 
 export class FileSystemController {
 
-    private has_permissions = async(full_path: string): Promise<boolean> => {
+    // operation:  0: read, 1: write, 2: execute
+    private has_permissions = (file: File, operation: number, user: User): boolean => {
 
-        
+        let mask = 0;
+
+        switch(operation) {
+            case 0:
+                mask = 0o4;
+                break;
+            case 1:
+                mask = 0o2;
+                break;
+            case 2:
+                mask = 0o1;
+                break;
+        }
+
+        if((file.permissions & mask) === mask)
+            return true;
+        if((file.permissions & (mask << 3)) === (mask << 3) && user.groups.includes(file.group))
+            return true;
+        if((file.permissions & (mask << 6)) === (mask << 6) && user === file.owner)
+            return true;
 
         return false;
-    }
-    
-    // recursive call, to show the entire tree
-    private read_dir = async (path: string, depth = 0): Promise<any[]> => {
-        let content = [];
-        const files_dirs = await fs.readdir(path, { withFileTypes: true });
-        for (const direct of files_dirs) {
-            if (direct.name === '.' || direct.name === '..') continue;
-            const fullPath = path_manipulator.resolve(FS_PATH, `${path}/${direct.name}`);
-            if (direct.isDirectory()) {
-                let dir_content = await this.read_dir(fullPath, depth + 1);
-                content.push({ [direct.name]: dir_content });
-            } else {
-                content.push(direct.name);
-            }
-        }
-        return content;
     }
     
     public readdir = async (req: Request, res: Response) => {
@@ -61,7 +65,7 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
         const now = Date.now();
-        const user: User = await userRepo.findOne({ where: { username: "pippo" } }) as User;
+        const user: User = req.user as User;
         if(user == null){
             res.status(500).json({ error: 'Not possible to retreive user data' });
         }
@@ -100,8 +104,13 @@ export class FileSystemController {
     public rmdir = async (req: Request, res: Response) => {
         const path: string = req.body.path;
         const name: string = req.params.name;
+
         try {
             const dir: File = await fileRepo.findOne({ where: { name } }) as File;
+
+            if(!this.has_permissions(dir, 1, req.user as User)) 
+                return res.status(403).json({ error: 'You have not the permission to remove the directory ' + path_manipulator.resolve(path, name) });
+
             if (dir.type != 1) {
                 return res.status(400).json({ error: 'ENOTDIR', message: 'The specified path is not a directory' });
             }
@@ -139,8 +148,13 @@ export class FileSystemController {
         const name: string = req.params.name;
         const text: string = req.body.text;
         try {
+
+            const file:File = await fileRepo.findOne({ where: { path: path_manipulator.resolve(FS_PATH, `${path}/${name}`) } }) as File;
+            if(!this.has_permissions(file, 1, req.user as User)) 
+                return res.status(403).json({ error: 'You have not the permission to write on the file ' + path_manipulator.resolve(path, name) });
+
             await fs.writeFile(path_manipulator.resolve(FS_PATH, `${path}/${name}`), text, {flag: "w"});
-            // check permissions!
+            
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -158,8 +172,12 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
 
-        // check permissions!
         try {
+
+            const file: File = await fileRepo.findOne({ where: { path: path_manipulator.resolve(FS_PATH, path, name) } }) as File;
+            if(!this.has_permissions(file, 0, req.user as User)) 
+                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + path_manipulator.resolve(path, name) });
+
             const content = await fs.readFile(path_manipulator.resolve(FS_PATH, `${path}/${name}`), {flag: "r"}); // tiene conto dei permessi!
             res.json({data: content.toString()});
         } catch (err: any) {
@@ -177,10 +195,13 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
 
-        // check permissions!
         try {
+
+            const file: File = await fileRepo.findOne({ where: { path: path_manipulator.resolve(FS_PATH, path, name) } }) as File;
+            if(!this.has_permissions(file, 1, req.user as User)) 
+                return res.status(403).json({ error: 'You have not the permission to delete the file ' + path_manipulator.resolve(path, name) });
+
             await fs.rm(path_manipulator.resolve(FS_PATH, `${path}/${name}`));
-            const file: File = await fileRepo.findOne({ where: { name } }) as File;
             await fileRepo.remove(file);
             res.status(200).end();
         } catch (err: any) {
@@ -200,10 +221,13 @@ export class FileSystemController {
         const old_path = path_manipulator.resolve(FS_PATH, `${path}/${old_name}`);
         const new_path = path_manipulator.resolve(FS_PATH, `${path}/${new_name}`);
 
-        // check permissions!
         try {
-            await fs.rename(old_path, new_path);
+
             const file: File = await fileRepo.findOne({ where: { path: old_path } }) as File;
+            if(!this.has_permissions(file, 1, req.user as User)) 
+                return res.status(403).json({ error: 'You have not the permission to rename on the file ' + path_manipulator.resolve(path, old_name) });
+
+            await fs.rename(old_path, new_path);
             await fileRepo.remove(file);
             const new_file = fileRepo.create({
                 ...file,
@@ -227,7 +251,6 @@ export class FileSystemController {
         const name: string = req.params.name;
         const new_mod: Mode = parseInt(req.body.new_mod);
 
-        // check permissions!
 
         if (isNaN(new_mod)) {
             return res.status(400).json({ error: "Parameter 'mod' is not a valid number" });
@@ -238,7 +261,12 @@ export class FileSystemController {
         }
 
         try {
-            const file: File = await fileRepo.findOne({ where: { path: path_manipulator.resolve(FS_PATH, `${path}/${name}`) } }) as File;
+            
+            const file: File = await fileRepo.findOne({ where: { path: path_manipulator.resolve(FS_PATH, path, name) } }) as File;
+            if(!this.has_permissions(file, 1, req.user as User)) 
+                return res.status(403).json({ error: 'You have not the permission to chane mod of the file ' + path_manipulator.resolve(path, name) });
+
+
             await fileRepo.remove(file);
             const new_file = fileRepo.create({
                 ...file,
