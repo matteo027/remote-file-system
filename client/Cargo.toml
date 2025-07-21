@@ -1,5 +1,5 @@
 [workspace]
 resolver = "3"
-members = [ "crates/rfs-api","crates/rfs-cliApp", "crates/rfs-fuse", "crates/rfs-models"]
+members = [ "crates/rfs-api", "crates/rfs-cache","crates/rfs-cliApp", "crates/rfs-fuse", "crates/rfs-models"]
 
 

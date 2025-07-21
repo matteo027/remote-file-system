@@ -97,6 +97,15 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         Ok(())
     }
 
+    fn destroy(&mut self) {
+        let mut map1 = self.state.path_to_ino.lock().unwrap();
+        map1.clear();
+        let mut map2 = self.state.ino_to_entries.lock().unwrap();
+        map2.clear();
+
+        // reset the http backend if needed
+    }
+
     fn getattr(&mut self, _req: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) { //fh serve poi quando si fa read/write
         let map = self.state.ino_to_entries.lock().unwrap();
         if let Some(entry) = map.get(&ino) {
