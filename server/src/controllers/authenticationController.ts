@@ -38,7 +38,7 @@ export class AuthenticationController {
         if(req.isAuthenticated())
             return next();
 
-        return res.status(400).json({ message: "not authenticated" });
+        return res.status(401).json({ message: "not authenticated" });
     }
 
 
