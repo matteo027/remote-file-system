@@ -94,7 +94,7 @@ export class FileSystemController {
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'EEXIST') { // Error Exists
-                res.status(400).json({ error: 'Folder already exists' });
+                res.status(409).json({ error: 'Folder already exists' });
             } else {
                 res.status(500).json({ error: 'Not possible to create the folder ' + path, details: err });
             }
@@ -159,7 +159,7 @@ export class FileSystemController {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'Directory not found' });
             } else if (err.code === 'EEXIST') {
-                res.status(400).json({ error: 'File already exists' });
+                res.status(409).json({ error: 'File already exists' });
             } else {
                 res.status(500).json({ error: 'Not possible to create the file ' + name, details: err });
             }
