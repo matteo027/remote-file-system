@@ -72,7 +72,7 @@ export class FileSystemController {
 
         const user_group: Group = await groupRepo.findOne({ where: { users: user }}) as Group;
         if(user == null){
-            res.status(500).json({ error: 'Not possible to retreive user0s group' });
+            res.status(500).json({ error: 'Not possible to retreive user\'s group' });
         }
         
         try {
@@ -82,7 +82,7 @@ export class FileSystemController {
                 name: name,
                 owner: user,
                 type: 1,
-                permissions: 0x777,
+                permissions: 0o755,
                 group: user_group,
                 size: 0,
                 atime: now,
@@ -129,8 +129,31 @@ export class FileSystemController {
     public create = async (req: Request, res: Response) => {
         const path: string = req.body.path;
         const name: string = req.params.name;
+        const now = Date.now();
+        const user: User = req.user as User;
+        if(user == null){
+            res.status(500).json({ error: 'Not possible to retreive user data' });
+        }
+
+        const user_group: Group = await groupRepo.findOne({ where: { users: user }}) as Group;
+        if(user == null){
+            res.status(500).json({ error: 'Not possible to retreive user\'s group' });
+        }
         try {
             await fs.writeFile(path_manipulator.resolve(FS_PATH, `${path}/${name}`), "", {flag: "wx"});
+            const file: File = {
+                path: path_manipulator.resolve(FS_PATH, path, name),
+                name: name,
+                owner: user,
+                type: 1,
+                permissions: 0o755,
+                group: user_group,
+                size: 0,
+                atime: now,
+                mtime: now,
+                ctime: now,
+                btime: now
+            } as File;
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
