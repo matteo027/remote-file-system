@@ -43,6 +43,14 @@ pub enum BackendError {
     NotFound(String),
     #[error("Unauthorized")]  
     Unauthorized,
+    #[error("Conflict")]
+    Conflict(String),
+    #[error("Internal server error")]
+    InternalServerError,
+    #[error("Bad answer format")]
+    BadAnswerFormat,
+    #[error("Server unreachable")]
+    ServerUnreachable,
     #[error("Other: {0}")]
     Other(String),
 }

@@ -1,11 +1,32 @@
 use rfs_models::{RemoteBackend,DirectoryEntry, BackendError};
+use std::str::FromStr;
 use std::time::SystemTime;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
+use reqwest::{Client, StatusCode, Url};
+use serde::{Deserialize, Serialize};
+use tokio::runtime::Runtime;
+
+#[derive(Deserialize, Debug)]
+struct ErrorResponse {
+    error: String,
+}
 
 pub struct StubBackend{
     //test purposes
     dirs: HashMap<String,Vec<DirectoryEntry>>,
+}
+
+pub struct Server{
+    runtime: Runtime, // from tokio, used to manage async calls
+    address: Url,
+    client: Client,
+    token: String
+}
+
+#[derive(Serialize)]
+struct DirApisPayload {
+    path: String
 }
 
 fn now() -> SystemTime {
@@ -70,5 +91,123 @@ impl RemoteBackend for StubBackend {
         Some(v) => Ok(v.clone()),
         None    => Err(BackendError::NotFound(path.to_string())),
         }
+    }
+}
+
+impl RemoteBackend for Server {
+    fn new() -> Self
+    where
+        Self: Sized
+    {
+        Self {
+            runtime: Runtime::new().unwrap(),
+            address: Url::from_str("http://127.0.0.1:3000/").unwrap(), // meglio passarlo come parametro la metodo (?)
+            client: reqwest::Client::new(),
+            token: String::from("")
+        }
+    }
+
+    fn list_dir(&self, path: &str) -> Result<Vec<DirectoryEntry>, BackendError> {
+
+        let api_result = self.runtime.block_on(async {
+            let request_url = self.address.clone()
+                .join("api/directories").unwrap()
+                .join(path.strip_prefix('/').unwrap_or(path)).unwrap();
+            println!("url built: {}", request_url);
+            
+            let resp = self.client
+                .get(String::from(request_url))
+                .bearer_auth(&self.token)
+                .send()
+                .await;
+
+            match resp {
+                Ok(resp) => { 
+                    match resp.status() {
+                        StatusCode::OK => {
+                            match resp.json::<Vec<DirectoryEntry>>().await {
+                                Ok(files) => return Ok(files),
+                                Err(e) => Err(BackendError::BadAnswerFormat)
+                            }
+                        },
+                        StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+                        StatusCode::CONFLICT => Err(BackendError::Conflict(resp.json::<ErrorResponse>().await.unwrap().error)),
+                        StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
+                        _ => Err(BackendError::Other(String::from("Unknown error")))
+                    }
+                }
+                Err(err) => Err(BackendError::Other(err.to_string()))
+            }
+        });
+        
+        return api_result;
+    }
+
+    fn create_dir(&mut self, entry: DirectoryEntry) -> Result<(), BackendError> {
+
+        let body = DirApisPayload {
+            path: String::from(Path::new(&entry.name).parent().unwrap_or(Path::new("")).to_str().unwrap_or(""))
+        };
+
+        let api_result = self.runtime.block_on(async {
+            let request_url = self.address.clone()
+                .join("/api/directories").unwrap()
+                .join(Path::new(&entry.name).file_name().unwrap_or_default().to_str().unwrap_or("")).unwrap();
+            
+            let resp =self.client
+                .post(request_url)
+                .bearer_auth(&self.token)
+                .json(&body)
+                .send()
+                .await;
+            match resp {
+                Ok(resp) => {
+                    match resp.status() {
+                        StatusCode::OK => Ok(()),
+                        StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+                        StatusCode::CONFLICT => Err(BackendError::Conflict(resp.json::<ErrorResponse>().await.unwrap().error)),
+                        StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
+                        _ => Err(BackendError::Other(String::from("Unknown error")))
+                    }
+                }
+                Err(err) => Err(BackendError::Other(err.to_string()))
+            }
+        });
+        
+        return api_result
+    }
+
+    fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
+        
+        let body = DirApisPayload {
+            path: String::from(Path::new(path).parent().unwrap_or(Path::new("")).to_str().unwrap_or(""))
+        };
+
+        let api_result = self.runtime.block_on(async {
+            let request_url = self.address.clone()
+                .join("/api/directories").unwrap()
+                .join(Path::new(path).file_name().unwrap_or_default().to_str().unwrap_or("")).unwrap();
+            
+            let resp =self.client
+                .delete(request_url)
+                .bearer_auth(&self.token)
+                .json(&body)
+                .send()
+                .await;
+            match resp {
+                Ok(resp) => {
+                    match resp.status() {
+                        StatusCode::OK => Ok(()),
+                        StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+                        StatusCode::CONFLICT => Err(BackendError::Conflict(resp.json::<ErrorResponse>().await.unwrap().error)),
+                        StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
+                        _ => Err(BackendError::Other(String::from("Unknown error")))
+                    }
+                }
+                Err(err) => Err(BackendError::Other(err.to_string()))
+            }
+        });
+        
+        return api_result
     }
 }
