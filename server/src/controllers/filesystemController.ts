@@ -50,13 +50,12 @@ export class FileSystemController {
             const content = await Promise.all(
             files.map(async (file_name) => {
                 const fullPath = path_manipulator.join(FS_PATH, path, file_name);
-                console.log(fullPath);
-                const file = await fileRepo.findOne({ where: { path: fullPath } });
-                console.log(file);
+                
+                const file: File = await fileRepo.findOne({ where: { path: fullPath }, relations: ['owner'] }) as File;
                 if (file == null) {
                     throw new Error(`Mismatch between the file system and the database for file: ${fullPath}`);
                 }
-                return file;
+                return {...file, owner: file.owner.username};
             })
         );
             return res.json(content);
