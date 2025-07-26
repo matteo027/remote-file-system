@@ -11,7 +11,7 @@ export class File {
   name: string;
 
   @ManyToOne(() => User, (user) => user.files)
-  @JoinColumn({ name: "owner" })
+  @JoinColumn({ name: "owner", referencedColumnName: "username" }) // owner column in File refers to User.username
   owner: User;
 
   @Column()
