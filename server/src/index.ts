@@ -10,6 +10,7 @@ import cors from 'cors';
 import { AuthenticationController } from './controllers/authenticationController';
 import { File } from './entities/File';
 import { promises as fs } from 'fs';
+import path from 'path';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -92,7 +93,7 @@ async function db() {
       await fs.mkdir('./file-system/admin', { recursive: true });
       let now = Date.now();
       const admin_dir = fileRepo.create({
-        path: '/admin',
+        path: path.resolve('./file-system/admin'),
         name: 'admin',
         owner: admin,
         type: 1,

@@ -43,12 +43,16 @@ export class FileSystemController {
     
     public readdir = async (req: Request, res: Response) => {
         const path: string = req.body.path;
+        if(path == undefined)
+            return res.status(400).json({ error: 'Bad format: path field is missing' });
         try {
             const files = await fs.readdir(path_manipulator.resolve(FS_PATH, `${path}`));
             const content = await Promise.all(
             files.map(async (file_name) => {
                 const fullPath = path_manipulator.join(FS_PATH, path, file_name);
+                console.log(fullPath);
                 const file = await fileRepo.findOne({ where: { path: fullPath } });
+                console.log(file);
                 if (file == null) {
                     throw new Error(`Mismatch between the file system and the database for file: ${fullPath}`);
                 }
