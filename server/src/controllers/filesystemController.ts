@@ -46,18 +46,18 @@ export class FileSystemController {
         try {
             const files = await fs.readdir(path_manipulator.resolve(FS_PATH, `${path}`));
             const content = await Promise.all(
-                files.map(async (file_name) => {
-                    const fullPath = path_manipulator.join(FS_PATH, path, file_name);
-                    const file: File = (await fileRepo.findOne({ where: { path: fullPath } })) as File;
-                    if(file == null) {
-                        return res.status(500).json({ error: 'Mismatch bewteen the file system and the database conatining metadata for file ' + path_manipulator.resolve(path) });
-                    }
-                    return file;
-                })
-            );
-            res.json(content);
+            files.map(async (file_name) => {
+                const fullPath = path_manipulator.join(FS_PATH, path, file_name);
+                const file = await fileRepo.findOne({ where: { path: fullPath } });
+                if (file == null) {
+                    throw new Error(`Mismatch between the file system and the database for file: ${fullPath}`);
+                }
+                return file;
+            })
+        );
+            return res.json(content);
         } catch (err) {
-            res.status(500).json({ error: 'Not possible to read from the folder ' + path_manipulator.resolve(path), details: err });
+            return res.status(500).json({ error: 'Not possible to read from the folder ' + path_manipulator.resolve(path), details: err });
         }
     }
 
@@ -67,12 +67,12 @@ export class FileSystemController {
         const now = Date.now();
         const user: User = req.user as User;
         if(user == null){
-            res.status(500).json({ error: 'Not possible to retreive user data' });
+            return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
 
         const user_group: Group = await groupRepo.findOne({ where: { users: user }}) as Group;
         if(user == null){
-            res.status(500).json({ error: 'Not possible to retreive user\'s group' });
+            return res.status(500).json({ error: 'Not possible to retreive user\'s group' });
         }
         
         try {
@@ -91,12 +91,12 @@ export class FileSystemController {
                 btime: now
             } as File;
             await fileRepo.save(directory);
-            res.status(200).end();
+            return res.status(200).end();
         } catch (err: any) {
             if (err.code === 'EEXIST') { // Error Exists
-                res.status(409).json({ error: 'Folder already exists' });
+                return res.status(409).json({ error: 'Folder already exists' });
             } else {
-                res.status(500).json({ error: 'Not possible to create the folder ' + path, details: err });
+                return res.status(500).json({ error: 'Not possible to create the folder ' + path, details: err });
             }
         }
     }
