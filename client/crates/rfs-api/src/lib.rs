@@ -175,13 +175,15 @@ impl RemoteBackend for Server {
 
     fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
         
+        self.check_and_authenticate()?;
+
         let body = DirApisPayload {
             path: String::from(Path::new(path).parent().unwrap_or(Path::new("")).to_str().unwrap_or(""))
         };
 
         let api_result = self.runtime.block_on(async {
             let request_url = self.address.clone()
-                .join("api/directories").unwrap()
+                .join("api/directories/").unwrap()
                 .join(Path::new(path).file_name().unwrap_or_default().to_str().unwrap_or("")).unwrap();
             
             let resp =self.client
@@ -189,8 +191,10 @@ impl RemoteBackend for Server {
                 .json(&body)
                 .send()
                 .await;
+            
             match resp {
                 Ok(resp) => {
+                    println!("Status: {}", resp.status());
                     match resp.status() {
                         StatusCode::OK => Ok(()),
                         StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
@@ -203,7 +207,7 @@ impl RemoteBackend for Server {
             }
         });
         
-        return api_result
+        return api_result;
     }
     
     fn check_and_authenticate(&mut self) -> Result<(), BackendError> {

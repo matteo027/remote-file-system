@@ -31,11 +31,11 @@ export class FileSystemController {
                 break;
         }
 
-        if((file.permissions & mask) === mask)
+        if((file.permissions & (mask << 6)) === (mask << 6) && user.username === file.owner.username)
             return true;
         if((file.permissions & (mask << 3)) === (mask << 3) && user.groups.includes(file.group))
             return true;
-        if((file.permissions & (mask << 6)) === (mask << 6) && user === file.owner)
+        if((file.permissions & mask) === mask)
             return true;
 
         return false;
@@ -46,7 +46,6 @@ export class FileSystemController {
         if(path == undefined)
             return res.status(400).json({ error: 'Bad format: path field is missing' });
 
-        
         try {
             const files = await fs.readdir(path_manipulator.resolve(FS_PATH, `${path}`));
             const content = await Promise.all(
@@ -71,6 +70,10 @@ export class FileSystemController {
         const name: string = req.params.name;
         const now = Date.now();
         const user: User = req.user as User;
+        
+        if(path == undefined)
+            return res.status(400).json({ error: 'Bad format: path field is missing' });
+
         if(user == null){
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
@@ -107,17 +110,20 @@ export class FileSystemController {
     public rmdir = async (req: Request, res: Response) => {
         const path: string = req.body.path;
         const name: string = req.params.name;
+        if(path == undefined)
+            return res.status(400).json({ error: 'Bad format: path field is missing' });
 
         try {
-            const dir: File = await fileRepo.findOne({ where: { name } }) as File;
-
+            const dir: File = await fileRepo.findOne({ where: { name }, relations: ['owner']  }) as File;
+console.log("OKKK");
             if(!this.has_permissions(dir, 1, req.user as User)) 
-                return res.status(403).json({ error: 'You have not the permission to remove the directory ' + path_manipulator.resolve(path, name) });
+                return res.status(403).json({ error: 'EACCES', message: 'You have not the permission to remove the directory ' + path_manipulator.resolve(path, name) });
 
             if (dir.type != 1) {
                 return res.status(400).json({ error: 'ENOTDIR', message: 'The specified path is not a directory' });
             }
-            await fs.rmdir(path_manipulator.resolve(FS_PATH, `${path}/${name}`), { recursive: true });
+            
+            await fs.rmdir(path_manipulator.resolve(FS_PATH, path.startsWith('/') ? path.slice(1) : path, name), { recursive: true });
             await fileRepo.remove(dir);
             res.status(200).end();
         } catch (err: any) {
@@ -134,6 +140,9 @@ export class FileSystemController {
         const name: string = req.params.name;
         const now = Date.now();
         const user: User = req.user as User;
+        if(path == undefined)
+            return res.status(400).json({ error: 'Bad format: path field is missing' });
+
         if(user == null){
             res.status(500).json({ error: 'Not possible to retreive user data' });
         }
@@ -173,6 +182,9 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
         const text: string = req.body.text;
+        if(path == undefined)
+            return res.status(400).json({ error: 'Bad format: path field is missing' });
+
         try {
 
             const file:File = await fileRepo.findOne({ where: { path: path_manipulator.resolve(FS_PATH, `${path}/${name}`) } }) as File;
@@ -197,6 +209,8 @@ export class FileSystemController {
     public open = async (req: Request, res: Response) => {
         const path: string = req.body.path;
         const name: string = req.params.name;
+        if(path == undefined)
+            return res.status(400).json({ error: 'Bad format: path field is missing' });
 
         try {
 
@@ -220,6 +234,8 @@ export class FileSystemController {
     public unlink = async (req: Request, res: Response) => {
         const path: string = req.body.path;
         const name: string = req.params.name;
+        if(path == undefined)
+            return res.status(400).json({ error: 'Bad format: path field is missing' });
 
         try {
 
@@ -243,6 +259,8 @@ export class FileSystemController {
         const path: string = req.body.path;
         const old_name: string = req.params.name;
         const new_name: string = req.body.new_name;
+        if(path == undefined)
+            return res.status(400).json({ error: 'Bad format: path field is missing' });
 
         const old_path = path_manipulator.resolve(FS_PATH, `${path}/${old_name}`);
         const new_path = path_manipulator.resolve(FS_PATH, `${path}/${new_name}`);
@@ -276,7 +294,8 @@ export class FileSystemController {
         const path: string = req.body.path;
         const name: string = req.params.name;
         const new_mod: Mode = parseInt(req.body.new_mod);
-
+        if(path == undefined)
+            return res.status(400).json({ error: 'Bad format: path field is missing' });
 
         if (isNaN(new_mod)) {
             return res.status(400).json({ error: "Parameter 'mod' is not a valid number" });
