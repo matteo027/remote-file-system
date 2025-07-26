@@ -78,7 +78,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
         }
     }
 
-    fn fetch_dir(&self, path: &Path) -> Result<Vec<DirectoryEntry>, BackendError> {
+    fn fetch_dir(&mut self, path: &Path) -> Result<Vec<DirectoryEntry>, BackendError> {
         let path_str = path.to_str().unwrap_or("/");
         self.backend.list_dir(path_str)
     }

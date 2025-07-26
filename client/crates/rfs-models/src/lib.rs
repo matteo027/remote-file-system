@@ -57,10 +57,12 @@ pub enum BackendError {
 
 pub trait RemoteBackend:Send + Sync {
     fn new() -> Self where Self: Sized;
-    fn list_dir(&self, path: &str) -> Result<Vec<DirectoryEntry>, BackendError>;
+    fn list_dir(&mut self, path: &str) -> Result<Vec<DirectoryEntry>, BackendError>;
     // fn read_file(&self, path: &str) -> Result<Vec<u8>, BackendError>;
     // fn write_file(&self, path: &str, data: &[u8]) -> Result<(), BackendError>;
     // fn delete_file(&self, path: &str) -> Result<(), BackendError>;
     fn create_dir(&mut self, entry: DirectoryEntry) -> Result<(), BackendError>;
     fn delete_dir(&mut self, path: &str) -> Result<(), BackendError>;
+
+    fn check_and_authenticate(&mut self) -> Result<(), BackendError>;
 }
