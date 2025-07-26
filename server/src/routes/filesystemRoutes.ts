@@ -10,7 +10,7 @@ const isLoggedIn = (new AuthenticationController).isLoggedIn;
 export function setRoutes(app: Express) {
     app.use('/', router);
 
-    router.get('/api/directories', isLoggedIn, filesystemController.readdir);
+    router.get('/api/directories', filesystemController.readdir);
 
     router.post('/api/directories/:name', isLoggedIn, filesystemController.mkdir);
     router.delete('/api/directories/:name', isLoggedIn, filesystemController.rmdir);

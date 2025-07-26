@@ -8,6 +8,8 @@ import session from 'express-session';
 import { Strategy as LocalStrategy } from 'passport-local';
 import cors from 'cors';
 import { AuthenticationController } from './controllers/authenticationController';
+import { File } from './entities/File';
+import { promises as fs } from 'fs';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -74,6 +76,7 @@ async function db() {
     console.log("Data Source has been initialized and DB schema created.");
 
     const userRepo = AppDataSource.getRepository(FSUser);
+    const fileRepo = AppDataSource.getRepository(File);
     const exists = await userRepo.findOneBy({ username: "admin" });
 
     if (!exists) {
@@ -84,14 +87,23 @@ async function db() {
       });
       await userRepo.save(admin);
       
+      
       // creating the admin (user) folder
-      await fetch('http://localhost:3000/api/directories/admin', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ path: '.' }),
-      });
+      await fs.mkdir('./file-system/admin', { recursive: true });
+      let now = Date.now();
+      const admin_dir = fileRepo.create({
+        path: '/admin',
+        name: 'admin',
+        owner: admin,
+        type: 1,
+        permissions: 0o755,
+        size: 0,
+        atime: now,
+        btime: now,
+        ctime: now,
+        mtime: now,
+      } as File);
+      fileRepo.save(admin_dir);
     }
 
   } catch (error) {

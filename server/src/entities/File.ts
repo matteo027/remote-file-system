@@ -20,7 +20,7 @@ export class File {
   @Column()
   permissions: number;
 
-  @ManyToOne(() => Group, (group) => group.groupname)
+  @ManyToOne(() => Group, (group) => group.groupname, { nullable: true })
   @JoinColumn({ name: "group" })
   group: Group;
 

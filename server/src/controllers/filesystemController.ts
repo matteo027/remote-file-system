@@ -57,7 +57,7 @@ export class FileSystemController {
         );
             return res.json(content);
         } catch (err) {
-            return res.status(500).json({ error: 'Not possible to read from the folder ' + path_manipulator.resolve(path), details: err });
+            return res.status(500).json({ error: 'Not possible to read from the folder ' + path_manipulator.resolve(FS_PATH, path), details: err });
         }
     }
 
