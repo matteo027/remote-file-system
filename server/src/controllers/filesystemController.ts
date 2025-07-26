@@ -45,6 +45,8 @@ export class FileSystemController {
         const path: string = req.body.path;
         if(path == undefined)
             return res.status(400).json({ error: 'Bad format: path field is missing' });
+
+        
         try {
             const files = await fs.readdir(path_manipulator.resolve(FS_PATH, `${path}`));
             const content = await Promise.all(
@@ -74,14 +76,11 @@ export class FileSystemController {
         }
 
         const user_group: Group = await groupRepo.findOne({ where: { users: user }}) as Group;
-        if(user == null){
-            return res.status(500).json({ error: 'Not possible to retreive user\'s group' });
-        }
         
         try {
-            await fs.mkdir(path_manipulator.resolve(FS_PATH, `${path}/${name}`));
+            await fs.mkdir(path_manipulator.resolve(FS_PATH, path.startsWith('/') ? path.slice(1) : path, name));
             const directory = {
-                path: path_manipulator.resolve(FS_PATH, path, name),
+                path: path_manipulator.resolve(FS_PATH, path.startsWith('/') ? path.slice(1) : path, name),
                 name: name,
                 owner: user,
                 type: 1,
@@ -93,6 +92,7 @@ export class FileSystemController {
                 ctime: now,
                 btime: now
             } as File;
+            console.log("dir: ", directory);
             await fileRepo.save(directory);
             return res.status(200).end();
         } catch (err: any) {

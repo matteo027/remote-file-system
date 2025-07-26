@@ -147,7 +147,7 @@ impl RemoteBackend for Server {
 
         let api_result = self.runtime.block_on(async {
             let request_url = self.address.clone()
-                .join("api/directories").unwrap()
+                .join("api/directories/").unwrap()
                 .join(Path::new(&entry.name).file_name().unwrap_or_default().to_str().unwrap_or("")).unwrap();
             
             let resp =self.client
@@ -157,6 +157,7 @@ impl RemoteBackend for Server {
                 .await;
             match resp {
                 Ok(resp) => {
+                    println!("Stats: {}", resp.status());
                     match resp.status() {
                         StatusCode::OK => Ok(()),
                         StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
