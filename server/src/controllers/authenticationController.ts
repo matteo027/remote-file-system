@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import * as crypto from 'crypto';
+import * as crypto from 'node:crypto';
 import { promisify } from 'util';
 import { User } from '../entities/User';
 import { AppDataSource } from '../data-source';
@@ -28,14 +28,14 @@ export class AuthenticationController {
 
             const hashedPassword = await scryptAsync(password, user?.salt || "", 32) as Buffer;
 
-            if(crypto.timingSafeEqual(Buffer.from(user?.password || "", 'hex'), hashedPassword))
+            if (crypto.timingSafeEqual(Buffer.from(user?.password || "", 'hex'), hashedPassword))
                 res({ username: user?.username });
             else res(false);
         })
     };
 
     public isLoggedIn = (req: Request, res: Response, next: () => any) => {
-        if(req.isAuthenticated())
+        if (req.isAuthenticated())
             return next();
 
         return res.status(401).json({ message: "not authenticated" });
