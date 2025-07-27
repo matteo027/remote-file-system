@@ -72,7 +72,7 @@ impl RemoteBackend for Server {
         Self: Sized
     {
         Self {
-            runtime: Runtime::new().unwrap(),
+            runtime: Runtime::new().expect("Unable to built a Runtime object"),
             address: Url::from_str("http://localhost:3000/").unwrap(), // meglio passarlo come parametro la metodo (?)
             client: {
                 let cookie_jar = Arc::new(Jar::default());
@@ -219,7 +219,7 @@ impl RemoteBackend for Server {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap();
+                .expect("Unable to geenrate e tokio Runtime");
 
             rt.block_on(async move {
                 // Step 1: check /api/me
