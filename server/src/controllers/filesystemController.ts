@@ -167,7 +167,7 @@ export class FileSystemController {
                 ctime: now,
                 btime: now
             } as File;
-            res.status(200).end();
+            res.status(200).json({...file, owner: user.username, group: user_group.groupname}).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'Directory not found' });
