@@ -1,5 +1,5 @@
 use reqwest::cookie::Jar;
-use rfs_models::{RemoteBackend,DirectoryEntry, BackendError};
+use rfs_models::{RemoteBackend,FileEntry, BackendError};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -16,7 +16,7 @@ struct ErrorResponse {
 
 pub struct StubBackend{
     //test purposes
-    dirs: HashMap<String,Vec<DirectoryEntry>>,
+    dirs: HashMap<String,Vec<FileEntry>>,
 }
 
 pub struct Server{
@@ -84,7 +84,7 @@ impl RemoteBackend for Server {
         }
     }
 
-    fn list_dir(&mut self, path: &str) -> Result<Vec<DirectoryEntry>, BackendError> {
+    fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
 
         self.check_and_authenticate()?;
 
@@ -107,7 +107,7 @@ impl RemoteBackend for Server {
                         StatusCode::OK => {
                             match resp.json::<Vec<FileServerResponse>>().await {
                                 Ok(files) => return Ok(files.into_iter().map(|f|{
-                                    DirectoryEntry {
+                                    FileEntry {
                                         ino: 0,
                                         name: f.name,
                                         is_dir: f.ty == 1,
@@ -137,7 +137,7 @@ impl RemoteBackend for Server {
         return api_result;
     }
 
-    fn create_dir(&mut self, entry: DirectoryEntry) -> Result<(), BackendError> {
+    fn create_dir(&mut self, entry: FileEntry) -> Result<(), BackendError> {
 
         self.check_and_authenticate()?;
 
@@ -157,7 +157,6 @@ impl RemoteBackend for Server {
                 .await;
             match resp {
                 Ok(resp) => {
-                    println!("Stats: {}", resp.status());
                     match resp.status() {
                         StatusCode::OK => Ok(()),
                         StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
@@ -194,7 +193,6 @@ impl RemoteBackend for Server {
             
             match resp {
                 Ok(resp) => {
-                    println!("Status: {}", resp.status());
                     match resp.status() {
                         StatusCode::OK => Ok(()),
                         StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug,Clone,Serialize,Deserialize)]
-pub struct DirectoryEntry {
+pub struct FileEntry {
     pub ino: u64, // Inode number
     pub name: String,
     pub is_dir: bool,
@@ -17,9 +17,9 @@ pub struct DirectoryEntry {
 
 }
 
-impl DirectoryEntry {
+impl FileEntry {
     pub fn new(ino: u64, name: String, is_dir: bool, size: u64, perms: u16, nlinks: u32, uid: u32, gid: u32, mtime: std::time::SystemTime, ctime: std::time::SystemTime, atime: std::time::SystemTime) -> Self {
-        DirectoryEntry {
+        FileEntry {
             ino,
             name,
             is_dir,
@@ -57,11 +57,11 @@ pub enum BackendError {
 
 pub trait RemoteBackend:Send + Sync {
     fn new() -> Self where Self: Sized;
-    fn list_dir(&mut self, path: &str) -> Result<Vec<DirectoryEntry>, BackendError>;
+    fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>, BackendError>;
     // fn read_file(&self, path: &str) -> Result<Vec<u8>, BackendError>;
     // fn write_file(&self, path: &str, data: &[u8]) -> Result<(), BackendError>;
     // fn delete_file(&self, path: &str) -> Result<(), BackendError>;
-    fn create_dir(&mut self, entry: DirectoryEntry) -> Result<(), BackendError>;
+    fn create_dir(&mut self, entry: FileEntry) -> Result<(), BackendError>;
     fn delete_dir(&mut self, path: &str) -> Result<(), BackendError>;
 
     fn check_and_authenticate(&mut self) -> Result<(), BackendError>;

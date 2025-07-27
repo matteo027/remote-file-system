@@ -1,6 +1,6 @@
 use std::{ffi::OsStr, path::{Path,PathBuf}, sync::{Arc,Mutex,atomic::{AtomicU64,Ordering}},time::{Duration,SystemTime}};
 use fuser::{Filesystem, Request, ReplyAttr, ReplyEntry, ReplyDirectory, FileAttr, FileType, ReplyEmpty};
-use rfs_models::{DirectoryEntry, BackendError, RemoteBackend};
+use rfs_models::{FileEntry, BackendError, RemoteBackend};
 use libc::{ENOENT, EIO, ENOTEMPTY};
 use std::collections::HashMap;
 
@@ -14,7 +14,7 @@ const ROOT_INO: u64 = 1;
 struct State{
     next_ino: AtomicU64,
     path_to_ino: Mutex<HashMap<PathBuf, u64>>,
-    ino_to_entries: Mutex<HashMap<u64, DirectoryEntry>>,
+    ino_to_entries: Mutex<HashMap<u64, FileEntry>>,
 }
 
 pub struct RemoteFS<B: RemoteBackend> {
@@ -30,7 +30,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
             ino_to_entries: Mutex::new(HashMap::new()),
         });
         state.path_to_ino.lock().unwrap().insert(PathBuf::from(ROOT_PATH), ROOT_INO);
-        let root_entry = DirectoryEntry::new(
+        let root_entry = FileEntry::new(
             ROOT_INO,
             "".to_string(),
             true,
@@ -58,7 +58,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
         ino
     }
 
-    fn entry_to_attr(entry: &DirectoryEntry) -> FileAttr {
+    fn entry_to_attr(entry: &FileEntry) -> FileAttr {
         FileAttr {
             ino: entry.ino,
             size: entry.size,
@@ -78,7 +78,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
         }
     }
 
-    fn fetch_dir(&mut self, path: &Path) -> Result<Vec<DirectoryEntry>, BackendError> {
+    fn fetch_dir(&mut self, path: &Path) -> Result<Vec<FileEntry>, BackendError> {
         let path_str = path.to_str().unwrap_or("/");
         self.backend.list_dir(path_str)
     }
@@ -176,7 +176,7 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         let full_path = parent_path.join(name);
 
         let fmode = mode & !umask; // applico il umask al mode
-        let mut new_entry = DirectoryEntry::new(
+        let mut new_entry = FileEntry::new(
             0, // ino fittizio, lo setto dopo
             full_path.to_string_lossy().into_owned(),
             true,
