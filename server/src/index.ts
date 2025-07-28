@@ -90,12 +90,11 @@ async function db() {
       await userRepo.save(admin);
       
       
-      // creating the admin (user) folder
-      await fs.mkdir('./file-system/admin', { recursive: true });
+      // creating the 5000 (admin) folder
+      await fs.mkdir('./file-system/5000', { recursive: true });
       let now = Date.now();
       const admin_dir = fileRepo.create({
-        path: path.resolve('./file-system/admin'),
-        name: '5000',
+        path: '5000',
         owner: admin,
         type: 1,
         permissions: 0o755,

@@ -33,8 +33,7 @@ struct LoginPayload {
 }
 #[derive(Deserialize)]
 struct FileServerResponse {
-    path: String,
-    name: String,
+    path: Box<Path>,
     owner: u32,
     group: Option<u32>,
     #[serde(rename = "type")]
@@ -103,7 +102,7 @@ impl RemoteBackend for Server {
 
                                     FileEntry {
                                         ino: 0,
-                                        name: f.name,
+                                        name: f.path.file_name().expect("Unable to get the file name").to_str().unwrap().to_string(),
                                         is_dir: f.ty == 1,
                                         size: f.size,
                                         perms: f.permissions,

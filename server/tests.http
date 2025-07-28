@@ -34,79 +34,49 @@ Content-Type: application/json
 
 ###
 
-GET http://localhost:3000/api/directories
+GET http://localhost:3000/api/directories/5000
 Content-Type: application/json
 
-{
-  "path": "."
-}
+{}
 
 ###
 
-POST http://localhost:3000/api/directories/prova-file-system-remoto
-Content-Type: application/json
-
-{
-  "path": "."
-}
+POST http://localhost:3000/api/directories/5000/prova
 
 ###
 
-DELETE  http://localhost:3000/api/directories/prova-file-system-remoto
-Content-Type: application/json
-
-{
-  "path": "."
-}
+DELETE  http://localhost:3000/api/directories/5000/prova
 
 ###
-POST http://localhost:3000/api/files/prova.txt
-Content-Type: application/json
-
-{
-  "path": "."
-}
+POST http://localhost:3000/api/files/5000/prova.txt
 
 ###
-PUT http://localhost:3000/api/files/prova.txt
+PUT http://localhost:3000/api/files/5000/prova.txt
 Content-Type: application/json
 
 {
-  "path": ".",
   "text": "ciao mondo"
 }
 
 ###
-GET http://localhost:3000/api/files/prova.txt
-Content-Type: application/json
-
-{
-  "path": "."
-}
+GET http://localhost:3000/api/files/5000/prova.txt
 
 ###
-DELETE   http://localhost:3000/api/files/prova.txt
-Content-Type: application/json
-
-{
-  "path": "."
-}
+DELETE   http://localhost:3000/api/files/5000/prova.txt
 
 ###
-PUT http://localhost:3000/api/prova.txt
+PUT http://localhost:3000/api/5000/prova.txt
 Content-Type: application/json
 
 {
-  "path": ".",
   "new_name": "prova_modificato.txt"
 }
 
 
 ###
-PUT http://localhost:3000/api/mod/prova.txt
+PUT http://localhost:3000/api/mod/5000/prova.txt
 Content-Type: application/json
 
 {
-  "path": ".",
   "new_mod": 292
 }

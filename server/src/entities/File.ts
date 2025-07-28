@@ -7,9 +7,6 @@ export class File {
   @PrimaryColumn()
   path: string;
 
-  @Column()
-  name: string;
-
   @ManyToOne(() => User, (user) => user.files)
   @JoinColumn({ name: "owner", referencedColumnName: "uid" })
   owner: User;

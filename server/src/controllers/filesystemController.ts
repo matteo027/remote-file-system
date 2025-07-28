@@ -43,15 +43,15 @@ export class FileSystemController {
     }
 
     public readdir = async (req: Request, res: Response) => {
-        const path: string = req.body.path;
-        if (path == undefined)
-            return res.status(400).json({ error: 'Bad format: path field is missing' });
-
+        if (req.params[0] == undefined)
+            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
+        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        
         try {
-            const files = await fs.readdir(path_manipulator.resolve(FS_PATH, `${path}`));
+            const files = await fs.readdir(path_manipulator.resolve(FS_PATH, path));
             const content = await Promise.all(
                 files.map(async (file_name) => {
-                    const fullPath = path_manipulator.join(FS_PATH, path, file_name);
+                    const fullPath = path_manipulator.join(path, file_name);
 
                     const file: File = await fileRepo.findOne({ where: { path: fullPath }, relations: ['owner'] }) as File;
                     if (file == null) {
@@ -67,14 +67,12 @@ export class FileSystemController {
     }
 
     public mkdir = async (req: Request, res: Response) => {
-        const path: string = req.body.path;
-        const name: string = req.params.name;
+
+        if (req.params[0] == undefined)
+            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
+        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
         const now = Date.now();
         const user: User = req.user as User;
-
-        if (path == undefined)
-            return res.status(400).json({ error: 'Bad format: path field is missing' });
-
         if (user == null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
@@ -82,10 +80,9 @@ export class FileSystemController {
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
 
         try {
-            await fs.mkdir(path_manipulator.resolve(FS_PATH, path.startsWith('/') ? path.slice(1) : path, name));
+            await fs.mkdir(path_manipulator.resolve(FS_PATH, path));
             const directory = {
-                path: path_manipulator.resolve(FS_PATH, path.startsWith('/') ? path.slice(1) : path, name),
-                name: name,
+                path: path,
                 owner: user,
                 type: 1,
                 permissions: 0o755,
@@ -96,7 +93,6 @@ export class FileSystemController {
                 ctime: now,
                 btime: now
             } as File;
-            console.log("dir: ", directory);
             await fileRepo.save(directory);
             return res.status(200).end();
         } catch (err: any) {
@@ -109,22 +105,20 @@ export class FileSystemController {
     }
 
     public rmdir = async (req: Request, res: Response) => {
-        const path: string = req.body.path;
-        const name: string = req.params.name;
-        if (path == undefined)
-            return res.status(400).json({ error: 'Bad format: path field is missing' });
-
+        if (req.params[0] === undefined)
+            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
+        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        
         try {
-            const dir: File = await fileRepo.findOne({ where: { name }, relations: ['owner'] }) as File;
-            console.log("OKKK");
+            const dir: File = await fileRepo.findOne({ where: { path }, relations: ['owner'] }) as File;
             if (!this.has_permissions(dir, 1, req.user as User))
-                return res.status(403).json({ error: 'EACCES', message: 'You have not the permission to remove the directory ' + path_manipulator.resolve(path, name) });
-
+                return res.status(403).json({ error: 'EACCES', message: 'You have not the permission to remove the directory ' + path });
+            
             if (dir.type != 1) {
                 return res.status(400).json({ error: 'ENOTDIR', message: 'The specified path is not a directory' });
             }
 
-            await fs.rmdir(path_manipulator.resolve(FS_PATH, path.startsWith('/') ? path.slice(1) : path, name), { recursive: true });
+            await fs.rm(path_manipulator.resolve(FS_PATH, path), { recursive: true }); // fs.rmdirwill be depreacted
             await fileRepo.remove(dir);
             res.status(200).end();
         } catch (err: any) {
@@ -137,26 +131,23 @@ export class FileSystemController {
     }
 
     public create = async (req: Request, res: Response) => {
-        const path: string = req.body.path;
-        const name: string = req.params.name;
+        
+        if (req.params[0] === undefined)
+            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
+        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
         const now = Date.now();
         const user: User = req.user as User;
-        if (path == undefined)
-            return res.status(400).json({ error: 'Bad format: path field is missing' });
-
-        if (user == null) {
-            res.status(500).json({ error: 'Not possible to retreive user data' });
+        if (user === null) {
+            return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
 
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
-        if (user == null) {
-            res.status(500).json({ error: 'Not possible to retreive user\'s group' });
-        }
+        
         try {
-            await fs.writeFile(path_manipulator.resolve(FS_PATH, `${path}/${name}`), "", { flag: "wx" });
+            await fs.writeFile(path_manipulator.resolve(FS_PATH, path), "", { flag: "wx" });
+            
             const file: File = {
-                path: path_manipulator.resolve(FS_PATH, path, name),
-                name: name,
+                path: path,
                 owner: user,
                 type: 1,
                 permissions: 0o755,
@@ -167,59 +158,70 @@ export class FileSystemController {
                 ctime: now,
                 btime: now
             } as File;
-            res.status(200).json({...file, owner: user.uid, group: user_group.gid}).end();
+            await fileRepo.save(file);
+            return res.status(200).json({...file, owner: user.uid, group: user_group.gid});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'Directory not found' });
             } else if (err.code === 'EEXIST') {
                 res.status(409).json({ error: 'File already exists' });
             } else {
-                res.status(500).json({ error: 'Not possible to create the file ' + name, details: err });
+                res.status(500).json({ error: 'Not possible to create the file ' + path, details: err });
             }
         }
     }
 
     public write = async (req: Request, res: Response) => {
-        const path: string = req.body.path;
-        const name: string = req.params.name;
+        if (req.params[0] === undefined || req.body.text === undefined)
+            return res.status(400).json({ error: 'Bad format: path or text parameter is missing' });
+        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
         const text: string = req.body.text;
-        if (path == undefined)
-            return res.status(400).json({ error: 'Bad format: path field is missing' });
+        const user: User = req.user as User;
+        if (user === null) {
+            return res.status(500).json({ error: 'Not possible to retreive user data' });
+        }
+
+        const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
 
         try {
 
-            const file: File = await fileRepo.findOne({ where: { path: path_manipulator.resolve(FS_PATH, `${path}/${name}`) } }) as File;
+            const file: File = await fileRepo.findOne({
+                where: { path },
+                relations: ['owner', 'group']
+            }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to write on the file ' + path_manipulator.resolve(path, name) });
+                return res.status(403).json({ error: 'You have not the permission to write on the file ' + path });
 
-            await fs.writeFile(path_manipulator.resolve(FS_PATH, `${path}/${name}`), text, { flag: "w" });
+            await fs.writeFile(path_manipulator.resolve(FS_PATH, path), text, { flag: "w" });
 
-            res.status(200).end();
+            res.status(200).json({...file, owner: user.uid, group: user_group.gid}).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to write on file ' + name, details: err });
+                res.status(500).json({ error: 'Not possible to write on file ' + path, details: err });
             }
         }
     }
 
     // returns an object containing the field "data", associated to the file content
     public open = async (req: Request, res: Response) => {
-        const path: string = req.body.path;
-        const name: string = req.params.name;
-        if (path == undefined)
-            return res.status(400).json({ error: 'Bad format: path field is missing' });
+        
+        if (req.params[0] === undefined)
+            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
+        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
 
         try {
-
-            const file: File = await fileRepo.findOne({ where: { path: path_manipulator.resolve(FS_PATH, path, name) } }) as File;
+            const file: File = await fileRepo.findOne({
+                where: { path },
+                relations: ['owner', 'group']
+            }) as File;
             if (!this.has_permissions(file, 0, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + path_manipulator.resolve(path, name) });
+                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + path });
 
-            const content = await fs.readFile(path_manipulator.resolve(FS_PATH, `${path}/${name}`), { flag: "r" }); // tiene conto dei permessi!
+            const content = await fs.readFile(path_manipulator.resolve(FS_PATH, path), { flag: "r" });
             res.json({ data: content.toString() });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -227,50 +229,58 @@ export class FileSystemController {
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to read the file ' + name, details: err });
+                res.status(500).json({ error: 'Not possible to read the file ' + path, details: err });
             }
         }
     }
 
     public unlink = async (req: Request, res: Response) => {
-        const path: string = req.body.path;
-        const name: string = req.params.name;
-        if (path == undefined)
-            return res.status(400).json({ error: 'Bad format: path field is missing' });
+        if (req.params[0] == undefined)
+            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
+        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        const user: User = req.user as User;
+        if (user === null) {
+            return res.status(500).json({ error: 'Not possible to retreive user data' });
+        }
 
+        const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
         try {
+            const file: File = await fileRepo.findOne({
+                where: { path },
+                relations: ['owner', 'group']
+            }) as File;
 
-            const file: File = await fileRepo.findOne({ where: { path: path_manipulator.resolve(FS_PATH, path, name) } }) as File;
+            if (!file) {
+                return res.status(404).json({ error: 'File metadata not found in database' });
+            }
             if (!this.has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to delete the file ' + path_manipulator.resolve(path, name) });
+                return res.status(403).json({ err: 'You have not the permission to delete the file ' + path });
 
-            await fs.rm(path_manipulator.resolve(FS_PATH, `${path}/${name}`));
+            await fs.rm(path_manipulator.resolve(FS_PATH, path));
             await fileRepo.remove(file);
-            res.status(200).end();
+            res.status(200).json({...file, owner: user.uid, group: user_group.gid});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
             } else {
-                res.status(500).json({ error: 'Not possible to remove the file ' + name, details: err });
+                res.status(500).json({ error: 'Not possible to remove the file ' + path, details: err });
             }
         }
     }
 
     public rename = async (req: Request, res: Response) => {
-        const path: string = req.body.path;
-        const old_name: string = req.params.name;
+        
+        if (req.params.old_path === undefined || req.body.new_name === undefined )
+            return res.status(400).json({ error: 'Bad format: old or new path parameter is missing' });
+        const old_path: string = req.params.old_path.startsWith('/') ? req.params.old_path.slice(1) : req.params.old_path;
         const new_name: string = req.body.new_name;
-        if (path == undefined)
-            return res.status(400).json({ error: 'Bad format: path field is missing' });
-
-        const old_path = path_manipulator.resolve(FS_PATH, `${path}/${old_name}`);
-        const new_path = path_manipulator.resolve(FS_PATH, `${path}/${new_name}`);
+        const new_path: string = path_manipulator.join(path_manipulator.dirname(old_path), new_name);
 
         try {
 
             const file: File = await fileRepo.findOne({ where: { path: old_path } }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to rename on the file ' + path_manipulator.resolve(path, old_name) });
+                return res.status(403).json({ error: 'You have not the permission to rename on the file ' + old_path });
 
             await fs.rename(old_path, new_path);
             await fileRepo.remove(file);
@@ -279,24 +289,23 @@ export class FileSystemController {
                 path: new_path
             });
             await fileRepo.save(new_file);
-            res.status(200).end();
+            res.status(200).json({...new_file, owner: new_file.owner.uid, group: new_file.group.gid});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to rename ' + old_name, details: err });
+                res.status(500).json({ error: 'Not possible to rename ' + old_path, details: err });
             }
         }
     }
 
     public setattr = async (req: Request, res: Response) => {
-        const path: string = req.body.path;
-        const name: string = req.params.name;
+        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
         const new_mod: Mode = parseInt(req.body.new_mod);
         if (path == undefined)
-            return res.status(400).json({ error: 'Bad format: path field is missing' });
+            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
 
         if (isNaN(new_mod)) {
             return res.status(400).json({ error: "Parameter 'mod' is not a valid number" });
@@ -308,9 +317,9 @@ export class FileSystemController {
 
         try {
 
-            const file: File = await fileRepo.findOne({ where: { path: path_manipulator.resolve(FS_PATH, path, name) } }) as File;
+            const file: File = await fileRepo.findOne({ where: { path } }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to chane mod of the file ' + path_manipulator.resolve(path, name) });
+                return res.status(403).json({ error: 'You have not the permission to chane mod of the file ' + path });
 
 
             await fileRepo.remove(file);
@@ -319,14 +328,14 @@ export class FileSystemController {
                 permissions: new_mod
             });
             await fileRepo.save(new_file);
-            res.status(200).end();
+            res.status(200).json({...new_file, owner: new_file.owner.uid, group: new_file.group.gid});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to change mod of ' + name, details: err });
+                res.status(500).json({ error: 'Not possible to change mod of ' + path, details: err });
             }
         }
     }
