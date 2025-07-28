@@ -1,5 +1,5 @@
 use reqwest::cookie::Jar;
-use rfs_models::{RemoteBackend,DirectoryEntry, BackendError};
+use rfs_models::{RemoteBackend,FsEntry, BackendError, FileChunk};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -12,11 +12,6 @@ use tokio::runtime::Runtime;
 #[derive(Deserialize, Debug)]
 struct ErrorResponse {
     error: String,
-}
-
-pub struct StubBackend{
-    //test purposes
-    dirs: HashMap<String,Vec<DirectoryEntry>>,
 }
 
 pub struct Server{
@@ -54,10 +49,6 @@ struct FileServerResponse {
     btime: SystemTime
 }
 
-fn now() -> SystemTime {
-    SystemTime::now()
-}
-
 fn deserialize_systemtime_from_millis<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
 where
     D: Deserializer<'de>,
@@ -66,11 +57,8 @@ where
     Ok(UNIX_EPOCH + Duration::from_millis(millis))
 }
 
-impl RemoteBackend for Server {
-    fn new() -> Self
-    where
-        Self: Sized
-    {
+impl Server{
+    pub fn new() -> Self{
         Self {
             runtime: Runtime::new().unwrap(),
             address: Url::from_str("http://localhost:3000/").unwrap(), // meglio passarlo come parametro la metodo (?)
@@ -84,133 +72,7 @@ impl RemoteBackend for Server {
         }
     }
 
-    fn list_dir(&mut self, path: &str) -> Result<Vec<DirectoryEntry>, BackendError> {
-
-        self.check_and_authenticate()?;
-
-        let api_result = self.runtime.block_on(async {
-            let request_url = self.address.clone()
-                .join("api/directories").unwrap();
-            let body = DirApisPayload {
-                path: String::from(path.strip_prefix('/').unwrap_or(path))
-            };
-            
-            let resp = self.client
-                .get(request_url)
-                .json(&body)
-                .send()
-                .await;
-            
-            match resp {
-                Ok(resp) => { 
-                    match resp.status() {
-                        StatusCode::OK => {
-                            match resp.json::<Vec<FileServerResponse>>().await {
-                                Ok(files) => return Ok(files.into_iter().map(|f|{
-                                    DirectoryEntry {
-                                        ino: 0,
-                                        name: f.name,
-                                        is_dir: f.ty == 1,
-                                        size: f.size,
-                                        perms: f.permissions,
-                                        nlinks: 0,
-                                        atime: f.atime,
-                                        mtime: f.mtime,
-                                        ctime: f.ctime,
-                                        uid: 1000,
-                                        gid: 1000
-                                    }
-                                }).collect()),
-                                Err(e) => Err(BackendError::BadAnswerFormat)
-                            }
-                        },
-                        StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
-                        StatusCode::CONFLICT => Err(BackendError::Conflict(resp.json::<ErrorResponse>().await.unwrap().error)),
-                        StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
-                        _ => Err(BackendError::Other(String::from("Unknown error")))
-                    }
-                }
-                Err(err) => Err(BackendError::Other(err.to_string()))
-            }
-        });
-        
-        return api_result;
-    }
-
-    fn create_dir(&mut self, entry: DirectoryEntry) -> Result<(), BackendError> {
-
-        self.check_and_authenticate()?;
-
-        let body = DirApisPayload {
-            path: String::from(Path::new(&entry.name).parent().unwrap_or(Path::new("")).to_str().unwrap_or(""))
-        };
-
-        let api_result = self.runtime.block_on(async {
-            let request_url = self.address.clone()
-                .join("api/directories/").unwrap()
-                .join(Path::new(&entry.name).file_name().unwrap_or_default().to_str().unwrap_or("")).unwrap();
-            
-            let resp =self.client
-                .post(request_url)
-                .json(&body)
-                .send()
-                .await;
-            match resp {
-                Ok(resp) => {
-                    println!("Stats: {}", resp.status());
-                    match resp.status() {
-                        StatusCode::OK => Ok(()),
-                        StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
-                        StatusCode::CONFLICT => Err(BackendError::Conflict(resp.json::<ErrorResponse>().await.unwrap().error)),
-                        StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
-                        _ => Err(BackendError::Other(String::from("Unknown error")))
-                    }
-                }
-                Err(err) => Err(BackendError::Other(err.to_string()))
-            }
-        });
-        
-        return api_result
-    }
-
-    fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
-        
-        self.check_and_authenticate()?;
-
-        let body = DirApisPayload {
-            path: String::from(Path::new(path).parent().unwrap_or(Path::new("")).to_str().unwrap_or(""))
-        };
-
-        let api_result = self.runtime.block_on(async {
-            let request_url = self.address.clone()
-                .join("api/directories/").unwrap()
-                .join(Path::new(path).file_name().unwrap_or_default().to_str().unwrap_or("")).unwrap();
-            
-            let resp =self.client
-                .delete(request_url)
-                .json(&body)
-                .send()
-                .await;
-            
-            match resp {
-                Ok(resp) => {
-                    println!("Status: {}", resp.status());
-                    match resp.status() {
-                        StatusCode::OK => Ok(()),
-                        StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
-                        StatusCode::CONFLICT => Err(BackendError::Conflict(resp.json::<ErrorResponse>().await.unwrap().error)),
-                        StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
-                        _ => Err(BackendError::Other(String::from("Unknown error")))
-                    }
-                }
-                Err(err) => Err(BackendError::Other(err.to_string()))
-            }
-        });
-        
-        return api_result;
-    }
-    
-    fn check_and_authenticate(&mut self) -> Result<(), BackendError> {
+    pub fn check_and_authenticate(&mut self) -> Result<(), BackendError> {
         let client = self.client.clone();
         let address = self.address.clone();
 
@@ -268,6 +130,173 @@ impl RemoteBackend for Server {
         handle.join().unwrap_or_else(|e| {
             Err(BackendError::Other(format!("Thread join failure: {:?}", e)))
         }) 
+    }
+}
+
+impl RemoteBackend for Server {
+
+    fn list_dir(&mut self, path: &str) -> Result<Vec<FsEntry>, BackendError> {
+
+        self.check_and_authenticate()?;
+
+        let api_result = self.runtime.block_on(async {
+            let request_url = self.address.clone()
+                .join("api/directories").unwrap();
+            let body = DirApisPayload {
+                path: String::from(path.strip_prefix('/').unwrap_or(path))
+            };
+            
+            let resp = self.client
+                .get(request_url)
+                .json(&body)
+                .send()
+                .await;
+            
+            match resp {
+                Ok(resp) => { 
+                    match resp.status() {
+                        StatusCode::OK => {
+                            match resp.json::<Vec<FileServerResponse>>().await {
+                                Ok(files) => return Ok(files.into_iter().map(|f|{
+                                    FsEntry {
+                                        ino: 0,
+                                        name: f.name,
+                                        path: f.path,
+                                        is_dir: f.ty == 1,
+                                        size: f.size,
+                                        perms: f.permissions,
+                                        nlinks: 0,
+                                        atime: f.atime,
+                                        mtime: f.mtime,
+                                        ctime: f.ctime,
+                                        uid: 1000,
+                                        gid: 1000
+                                    }
+                                }).collect()),
+                                Err(e) => Err(BackendError::BadAnswerFormat)
+                            }
+                        },
+                        StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+                        StatusCode::CONFLICT => Err(BackendError::Conflict(resp.json::<ErrorResponse>().await.unwrap().error)),
+                        StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
+                        _ => Err(BackendError::Other(String::from("Unknown error")))
+                    }
+                }
+                Err(err) => Err(BackendError::Other(err.to_string()))
+            }
+        });
+        
+        return api_result;
+    }
+
+    fn create_dir(&mut self, path: &str) -> Result<FsEntry, BackendError> {
+
+        self.check_and_authenticate()?;
+
+        let body = DirApisPayload {
+            path: String::from(Path::new(path).parent().unwrap_or(Path::new("")).to_str().unwrap_or(""))
+        };
+
+        let api_result = self.runtime.block_on(async {
+            let request_url = self.address.clone()
+                .join("api/directories/").unwrap()
+                .join(Path::new(path).file_name().unwrap_or_default().to_str().unwrap_or("")).unwrap();
+            let resp = self.client
+                .post(request_url)
+                .json(&body)
+                .send()
+                .await;
+            match resp {
+                Ok(resp) => {
+                    println!("Stats: {}", resp.status());
+                    match resp.status() {
+                        StatusCode::OK => {
+                            match resp.json::<FileServerResponse>().await {
+                                Ok(f) => Ok(FsEntry {
+                                    ino: 0,
+                                    name: f.name,
+                                    path: f.path,
+                                    is_dir: f.ty == 1,
+                                    size: f.size,
+                                    perms: f.permissions,
+                                    nlinks: 0,
+                                    atime: f.atime,
+                                    mtime: f.mtime,
+                                    ctime: f.ctime,
+                                    uid: 1000,
+                                    gid: 1000
+                                }),
+                                Err(_) => Err(BackendError::BadAnswerFormat)
+                            }
+                        },
+                        StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+                        StatusCode::CONFLICT => Err(BackendError::Conflict(resp.json::<ErrorResponse>().await.unwrap().error)),
+                        StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
+                        _ => Err(BackendError::Other(String::from("Unknown error")))
+                    }
+                }
+                Err(err) => Err(BackendError::Other(err.to_string()))
+            }
+        });
+        
+        return api_result
+    }
+
+    fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
+        
+        self.check_and_authenticate()?;
+
+        let body = DirApisPayload {
+            path: String::from(Path::new(path).parent().unwrap_or(Path::new("")).to_str().unwrap_or(""))
+        };
+
+        let api_result = self.runtime.block_on(async {
+            let request_url = self.address.clone()
+                .join("api/directories/").unwrap()
+                .join(Path::new(path).file_name().unwrap_or_default().to_str().unwrap_or("")).unwrap();
+            
+            let resp =self.client
+                .delete(request_url)
+                .json(&body)
+                .send()
+                .await;
+            
+            match resp {
+                Ok(resp) => {
+                    println!("Status: {}", resp.status());
+                    match resp.status() {
+                        StatusCode::OK => Ok(()),
+                        StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+                        StatusCode::CONFLICT => Err(BackendError::Conflict(resp.json::<ErrorResponse>().await.unwrap().error)),
+                        StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
+                        _ => Err(BackendError::Other(String::from("Unknown error")))
+                    }
+                }
+                Err(err) => Err(BackendError::Other(err.to_string()))
+            }
+        });
+        
+        return api_result;
+    }
+
+    fn get_attr(&mut self, path: &str) -> Result<FsEntry, BackendError> {
+        unimplemented!(); //MANCA LATO SERVER UNA FUNZIONE CHE MI RESTITUISCA I METADATI DI SPECIFICO FILE
+    }
+
+    fn create_file(&mut self, path: &str) -> Result<FsEntry, BackendError> {
+        unimplemented!(); 
+    }
+
+    fn delete_file(&mut self, path: &str) -> Result<(), BackendError> {
+        unimplemented!(); 
+    }
+
+    fn read_chunk(&mut self, path: &str, offset: u64, size: u64) -> Result<FileChunk, BackendError> {
+        unimplemented!(); //MANCA LATO SERVER UNA FUNZIONE CHE MI LEGGA UN FILE A BLOCCHI
+    }
+
+    fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
+        unimplemented!(); //MANCA LATO SERVER UNA FUNZIONE CHE MI SCRIVA UN FILE A BLOCCHI
     }
 
 }

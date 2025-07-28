@@ -1,38 +1,38 @@
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use std::time::{Duration, SystemTime};
 
-#[derive(Debug,Clone,Serialize,Deserialize)]
-pub struct DirectoryEntry {
-    pub ino: u64, // Inode number
+// Modello di dominio per una voce di file system remoto, da utilizzare internamente e per caching
+#[derive(Debug, Clone)]
+pub struct FsEntry {
+    /// percorso completo di file o directory
+    pub path: String,
+    /// nome (ultima componente di path)
     pub name: String,
+    /// indica se è directory
     pub is_dir: bool,
-    pub size: u64, // Size in bytes
-    pub perms: u16, // File permissions
-    pub nlinks: u32, // Number of hard links
-    pub atime: std::time::SystemTime, // Last access time
-    pub mtime: std::time::SystemTime, // Last modified time
-    pub ctime: std::time::SystemTime, // Creation time
-    pub uid: u32, // User ID of the owner
-    pub gid: u32, // Group ID of the owner
-
+    /// inode assegnato dal server
+    pub ino: u64,
+    /// dimensione in byte
+    pub size: u64,
+    /// atime in secondi dall'epoch
+    pub atime: SystemTime,
+    /// mtime in secondi dall'epoch
+    pub mtime: SystemTime,
+    /// ctime in secondi dall'epoch
+    pub ctime: SystemTime,
+    /// permessi in formato octale (es. 0o755)
+    pub perms: u16, 
+    /// numero di link
+    pub nlinks: u32,
+    /// user ID
+    pub uid: u32,
+    /// group ID
+    pub gid: u32,
 }
 
-impl DirectoryEntry {
-    pub fn new(ino: u64, name: String, is_dir: bool, size: u64, perms: u16, nlinks: u32, uid: u32, gid: u32, mtime: std::time::SystemTime, ctime: std::time::SystemTime, atime: std::time::SystemTime) -> Self {
-        DirectoryEntry {
-            ino,
-            name,
-            is_dir,
-            size,
-            perms,
-            nlinks,
-            atime,
-            mtime,
-            ctime,
-            uid,
-            gid,
-        }
-    }
+pub struct FileChunk {
+    pub data: Vec<u8>,
+    pub offset: u64,
 }
 
 #[derive(Debug, Error)]
@@ -55,14 +55,21 @@ pub enum BackendError {
     Other(String),
 }
 
-pub trait RemoteBackend:Send + Sync {
-    fn new() -> Self where Self: Sized;
-    fn list_dir(&mut self, path: &str) -> Result<Vec<DirectoryEntry>, BackendError>;
-    // fn read_file(&self, path: &str) -> Result<Vec<u8>, BackendError>;
-    // fn write_file(&self, path: &str, data: &[u8]) -> Result<(), BackendError>;
-    // fn delete_file(&self, path: &str) -> Result<(), BackendError>;
-    fn create_dir(&mut self, entry: DirectoryEntry) -> Result<(), BackendError>;
+pub trait RemoteBackend: Send + Sync {
+    /// Lista il contenuto di una directory
+    fn list_dir(&mut self, path: &str) -> Result<Vec<FsEntry>, BackendError>;
+    /// Ottiene metadati completi di un file o directory
+    fn get_attr(&mut self, path: &str) -> Result<FsEntry, BackendError>;
+    /// Crea un file vuoto e restituisce i metadati
+    fn create_file(&mut self, path: &str) -> Result<FsEntry, BackendError>;
+    /// Crea una directory e restituisce i metadati
+    fn create_dir(&mut self, path: &str) -> Result<FsEntry, BackendError>;
+    /// Elimina un file
+    fn delete_file(&mut self, path: &str) -> Result<(), BackendError>;
+    /// Elimina una directory
     fn delete_dir(&mut self, path: &str) -> Result<(), BackendError>;
-
-    fn check_and_authenticate(&mut self) -> Result<(), BackendError>;
+    /// Legge un chunk di file (offset, lunghezza)
+    fn read_chunk(&mut self, path: &str, offset: u64, size: u64) -> Result<FileChunk, BackendError>;
+    /// Scrive un chunk di file (offset incluso) e restituisce il numero di byte scritti
+    fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError>;
 }
