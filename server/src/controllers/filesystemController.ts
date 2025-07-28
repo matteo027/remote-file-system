@@ -57,7 +57,7 @@ export class FileSystemController {
                     if (file == null) {
                         throw new Error(`Mismatch between the file system and the database for file: ${fullPath}`);
                     }
-                    return { ...file, owner: file.owner.uid };
+                    return { ...file, owner: file.owner.uid, group: file.group?.gid };
                 })
             );
             return res.json(content);
@@ -159,7 +159,7 @@ export class FileSystemController {
                 btime: now
             } as File;
             await fileRepo.save(file);
-            return res.status(200).json({...file, owner: user.uid, group: user_group.gid});
+            res.status(200).json({...file, owner: user.uid, group: user_group?.gid});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'Directory not found' });
@@ -194,7 +194,7 @@ export class FileSystemController {
 
             await fs.writeFile(path_manipulator.resolve(FS_PATH, path), text, { flag: "w" });
 
-            res.status(200).json({...file, owner: user.uid, group: user_group.gid}).end();
+            res.status(200).json({...file, owner: user.uid, group: user_group?.gid});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -218,11 +218,13 @@ export class FileSystemController {
                 where: { path },
                 relations: ['owner', 'group']
             }) as File;
+            if(file === null)
+                return res.status(404).json({ error: 'File not found' });res.status(404).json({ error: 'File not found' });
             if (!this.has_permissions(file, 0, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to read the content the file ' + path });
 
             const content = await fs.readFile(path_manipulator.resolve(FS_PATH, path), { flag: "r" });
-            res.json({ data: content.toString() });
+            res.json({ ...file, owner: file.owner.uid, group: file.group?.gid, data: content.toString() });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -258,7 +260,7 @@ export class FileSystemController {
 
             await fs.rm(path_manipulator.resolve(FS_PATH, path));
             await fileRepo.remove(file);
-            res.status(200).json({...file, owner: user.uid, group: user_group.gid});
+            res.status(200).json({...file, owner: user.uid, group: user_group?.gid});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -270,26 +272,29 @@ export class FileSystemController {
 
     public rename = async (req: Request, res: Response) => {
         
-        if (req.params.old_path === undefined || req.body.new_name === undefined )
-            return res.status(400).json({ error: 'Bad format: old or new path parameter is missing' });
-        const old_path: string = req.params.old_path.startsWith('/') ? req.params.old_path.slice(1) : req.params.old_path;
+        if (req.params[0] === undefined || req.body.new_name === undefined )
+            return res.status(400).json({ error: 'Bad format: old path or new file name parameter is missing' });
+        const old_path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
         const new_name: string = req.body.new_name;
         const new_path: string = path_manipulator.join(path_manipulator.dirname(old_path), new_name);
 
         try {
 
-            const file: File = await fileRepo.findOne({ where: { path: old_path } }) as File;
+            const file: File = await fileRepo.findOne({
+                where: { path : old_path },
+                relations: ['owner', 'group']
+            }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to rename on the file ' + old_path });
 
-            await fs.rename(old_path, new_path);
+            await fs.rename(path_manipulator.join(FS_PATH, old_path), path_manipulator.join(FS_PATH, new_path));
             await fileRepo.remove(file);
             const new_file = fileRepo.create({
                 ...file,
                 path: new_path
             });
             await fileRepo.save(new_file);
-            res.status(200).json({...new_file, owner: new_file.owner.uid, group: new_file.group.gid});
+            res.status(200).json({...new_file, owner: new_file.owner.uid, group: new_file.group?.gid});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -317,18 +322,19 @@ export class FileSystemController {
 
         try {
 
-            const file: File = await fileRepo.findOne({ where: { path } }) as File;
+            let file: File = await fileRepo.findOne({
+                where: { path },
+                relations: ['owner', 'group']
+            }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to chane mod of the file ' + path });
 
 
-            await fileRepo.remove(file);
-            const new_file = fileRepo.create({
-                ...file,
-                permissions: new_mod
-            });
-            await fileRepo.save(new_file);
-            res.status(200).json({...new_file, owner: new_file.owner.uid, group: new_file.group.gid});
+            file.permissions = new_mod;
+            await fileRepo.save(file);
+
+            await fs.chmod(path_manipulator.join(FS_PATH, path), new_mod);
+            res.status(200).json({...file, owner: file.owner.uid, group: file.group?.gid});
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });

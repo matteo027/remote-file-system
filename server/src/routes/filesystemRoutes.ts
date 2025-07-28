@@ -20,7 +20,7 @@ export function setRoutes(app: Express) {
     router.get('/api/files/*', isLoggedIn, filesystemController.open);
     router.delete('/api/files/*', isLoggedIn, filesystemController.unlink);
 
-    router.put('/api/*', isLoggedIn, filesystemController.rename); // rename
+    router.put('/api/files/*', isLoggedIn, filesystemController.rename); // rename
     router.put('/api/mod/*', isLoggedIn, filesystemController.setattr);
 
     

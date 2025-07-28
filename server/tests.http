@@ -65,7 +65,7 @@ GET http://localhost:3000/api/files/5000/prova.txt
 DELETE   http://localhost:3000/api/files/5000/prova.txt
 
 ###
-PUT http://localhost:3000/api/5000/prova.txt
+PUT http://localhost:3000/api/files/5000/prova.txt
 Content-Type: application/json
 
 {
