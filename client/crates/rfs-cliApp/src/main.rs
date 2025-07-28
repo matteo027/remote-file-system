@@ -1,7 +1,7 @@
 use clap::Parser;
 use fuser::{MountOption,spawn_mount2};
 use rfs_fuse::RemoteFS;
-use rfs_api::{Server, StubBackend};
+use rfs_api::{Server};
 use rfs_models::RemoteBackend;
 
 

@@ -1,5 +1,6 @@
 use reqwest::cookie::Jar;
 use rfs_models::{RemoteBackend,FileEntry, BackendError};
+use std::fs::OpenOptions;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -8,21 +9,21 @@ use std::path::{Path};
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::runtime::Runtime;
+use std::io::Write;
 
 #[derive(Deserialize, Debug)]
 struct ErrorResponse {
     error: String,
 }
 
-pub struct StubBackend{
-    //test purposes
-    dirs: HashMap<String,Vec<FileEntry>>,
-}
-
 pub struct Server{
     runtime: Runtime, // from tokio, used to manage async calls
     address: Url,
-    client: Client
+    client: Client,
+    uid_s: HashMap<String, u32>,
+    gid_s: HashMap<String, u32>,
+    UID_counter: u32,
+    GID_counter: u32
 }
 
 #[derive(Serialize)]
@@ -54,10 +55,6 @@ struct FileServerResponse {
     btime: SystemTime
 }
 
-fn now() -> SystemTime {
-    SystemTime::now()
-}
-
 fn deserialize_systemtime_from_millis<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
 where
     D: Deserializer<'de>,
@@ -80,7 +77,11 @@ impl RemoteBackend for Server {
                 reqwest::Client::builder()
                     .cookie_provider(Arc::clone(&cookie_jar))
                     .build().expect("Unable to build the Client object")
-            }
+            },
+            uid_s: HashMap::new(),
+            gid_s: HashMap::new(),
+            UID_counter: 5000,
+            GID_counter: 5000
         }
     }
 
@@ -107,6 +108,41 @@ impl RemoteBackend for Server {
                         StatusCode::OK => {
                             match resp.json::<Vec<FileServerResponse>>().await {
                                 Ok(files) => return Ok(files.into_iter().map(|f|{
+
+                                    if !self.uid_s.contains_key(&f.owner) {
+                                        self.uid_s.insert(f.owner.clone(), self.UID_counter);
+                                        std::fs::create_dir_all("tmp").expect("Unable to create tmp directory");
+                                        let mut file = OpenOptions::new()
+                                            .append(true)
+                                            .create(true)
+                                            .open("tmp/passwd").expect("Unable to open tmp/passwd");
+                                        writeln!(file, "{}:{}", self.UID_counter, f.owner).expect("Unbale to write on tmp/passwd");
+                                        self.UID_counter += 1;
+                                    }
+                                    let uid = self.uid_s.get(&f.owner).unwrap();
+                                    let gid;
+                                    match f.group {
+                                        Some(group) => {
+                                            if !self.gid_s.contains_key(&group) {
+                                                self.gid_s.insert(group.clone(), self.GID_counter);
+                                                std::fs::create_dir_all("tmp").expect("Unable to create tmp directory");
+                                                let mut file = OpenOptions::new()
+                                                    .append(true)
+                                                    .create(true)
+                                                    .open("tmp/group").expect("Unable to open tmp/passwd");
+                                                writeln!(file, "{}:{}", self.GID_counter, group).expect("Unbale to write on tmp/passwd");
+                                                self.GID_counter += 1;
+                                            }
+                                            gid = self.gid_s.get(&group).unwrap();
+                                        },
+                                        None => {
+                                            gid = uid;
+                                        }
+                                        
+                                    }
+                                    
+                                    
+
                                     FileEntry {
                                         ino: 0,
                                         name: f.name,
@@ -117,8 +153,8 @@ impl RemoteBackend for Server {
                                         atime: f.atime,
                                         mtime: f.mtime,
                                         ctime: f.ctime,
-                                        uid: 1000,
-                                        gid: 1000
+                                        uid: *uid,
+                                        gid: *gid
                                     }
                                 }).collect()),
                                 Err(e) => Err(BackendError::BadAnswerFormat)
