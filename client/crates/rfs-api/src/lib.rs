@@ -3,11 +3,14 @@ use rfs_models::{RemoteBackend,FsEntry, BackendError, FileChunk};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::collections::HashMap;
 use std::path::{Path};
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::runtime::Runtime;
+
+// ONLY FOR TESTING PURPOSES
+pub mod stub;
+pub use stub::StubBackend;
 
 #[derive(Deserialize, Debug)]
 struct ErrorResponse {
@@ -297,6 +300,10 @@ impl RemoteBackend for Server {
 
     fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
         unimplemented!(); //MANCA LATO SERVER UNA FUNZIONE CHE MI SCRIVA UN FILE A BLOCCHI
+    }
+
+    fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FsEntry, BackendError> {
+        unimplemented!();
     }
 
 }

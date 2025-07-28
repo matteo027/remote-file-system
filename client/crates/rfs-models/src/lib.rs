@@ -1,5 +1,5 @@
 use thiserror::Error;
-use std::time::{Duration, SystemTime};
+use std::time::{SystemTime};
 
 // Modello di dominio per una voce di file system remoto, da utilizzare internamente e per caching
 #[derive(Debug, Clone)]
@@ -72,4 +72,6 @@ pub trait RemoteBackend: Send + Sync {
     fn read_chunk(&mut self, path: &str, offset: u64, size: u64) -> Result<FileChunk, BackendError>;
     /// Scrive un chunk di file (offset incluso) e restituisce il numero di byte scritti
     fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError>;
+    /// Rinomina un file o directory
+    fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FsEntry, BackendError>;
 }

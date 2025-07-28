@@ -1,9 +1,7 @@
 use clap::Parser;
 use fuser::{MountOption};
 use rfs_fuse::RemoteFS;
-use rfs_api::{Server};
-use rfs_models::RemoteBackend;
-
+use rfs_api::{Server,StubBackend};
 
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
@@ -20,7 +18,7 @@ fn main() {
     let options = vec![MountOption::FSName("Remote-FS".to_string()), MountOption::RW];
     eprintln!("Remote-FS mounted at {}", cli.mount_point);
     eprintln!("Remote address: {}", cli.remote_address);
-    fuser::mount2(RemoteFS::new(Server::new()).expect("failed to create RemoteFS"), cli.mount_point, &options).expect("failed to mount");
+    fuser::mount2(RemoteFS::new(StubBackend::new()).expect("failed to create RemoteFS"), cli.mount_point, &options).expect("failed to mount");
     eprintln!("Remote-FS unmounted");
     return;
 }
