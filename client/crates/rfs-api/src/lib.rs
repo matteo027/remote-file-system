@@ -19,11 +19,7 @@ struct ErrorResponse {
 pub struct Server{
     runtime: Runtime, // from tokio, used to manage async calls
     address: Url,
-    client: Client,
-    uid_s: HashMap<String, u32>,
-    gid_s: HashMap<String, u32>,
-    UID_counter: u32,
-    GID_counter: u32
+    client: Client
 }
 
 #[derive(Serialize)]
@@ -32,15 +28,15 @@ struct DirApisPayload {
 }
 #[derive(Serialize)]
 struct LoginPayload {
-    username: String,
+    username: String, // it's the uid
     password: String
 }
 #[derive(Deserialize)]
 struct FileServerResponse {
     path: String,
     name: String,
-    owner: String,
-    group: Option<String>,
+    owner: u32,
+    group: Option<u32>,
     #[serde(rename = "type")]
     ty: usize,
     permissions: u16,
@@ -77,11 +73,7 @@ impl RemoteBackend for Server {
                 reqwest::Client::builder()
                     .cookie_provider(Arc::clone(&cookie_jar))
                     .build().expect("Unable to build the Client object")
-            },
-            uid_s: HashMap::new(),
-            gid_s: HashMap::new(),
-            UID_counter: 5000,
-            GID_counter: 5000
+            }
         }
     }
 
@@ -109,40 +101,6 @@ impl RemoteBackend for Server {
                             match resp.json::<Vec<FileServerResponse>>().await {
                                 Ok(files) => return Ok(files.into_iter().map(|f|{
 
-                                    if !self.uid_s.contains_key(&f.owner) {
-                                        self.uid_s.insert(f.owner.clone(), self.UID_counter);
-                                        std::fs::create_dir_all("/tmp").expect("Unable to create tmp directory");
-                                        let mut file = OpenOptions::new()
-                                            .append(true)
-                                            .create(true)
-                                            .open("/tmp/passwd").expect("Unable to open /tmp/passwd");
-                                        writeln!(file, "{}:{}", self.UID_counter, f.owner).expect("Unbale to write on /tmp/passwd");
-                                        self.UID_counter += 1;
-                                    }
-                                    let uid = self.uid_s.get(&f.owner).unwrap();
-                                    let gid;
-                                    match f.group {
-                                        Some(group) => {
-                                            if !self.gid_s.contains_key(&group) {
-                                                self.gid_s.insert(group.clone(), self.GID_counter);
-                                                std::fs::create_dir_all("/tmp").expect("Unable to create /tmp directory");
-                                                let mut file = OpenOptions::new()
-                                                    .append(true)
-                                                    .create(true)
-                                                    .open("/tmp/group").expect("Unable to open /tmp/passwd");
-                                                writeln!(file, "{}:{}", self.GID_counter, group).expect("Unbale to write on /tmp/passwd");
-                                                self.GID_counter += 1;
-                                            }
-                                            gid = self.gid_s.get(&group).unwrap();
-                                        },
-                                        None => {
-                                            gid = uid;
-                                        }
-                                        
-                                    }
-                                    
-                                    
-
                                     FileEntry {
                                         ino: 0,
                                         name: f.name,
@@ -153,8 +111,11 @@ impl RemoteBackend for Server {
                                         atime: f.atime,
                                         mtime: f.mtime,
                                         ctime: f.ctime,
-                                        uid: *uid,
-                                        gid: *gid
+                                        uid: f.owner,
+                                        gid: match f.group {
+                                            Some(g) => g,
+                                            None => f.owner
+                                        }
                                     }
                                 }).collect()),
                                 Err(e) => Err(BackendError::BadAnswerFormat)
@@ -268,7 +229,7 @@ impl RemoteBackend for Server {
                     // Step 2: login
                     let login_url = address.join("api/login").unwrap();
                     let body = LoginPayload {
-                        username: "admin".into(),
+                        username: "5000".into(),
                         password: "admin".into(),
                     };
                     let resp_login = client.post(login_url.clone())

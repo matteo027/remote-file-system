@@ -32,7 +32,7 @@ export class FileSystemController {
                 break;
         }
 
-        if ((file.permissions & (mask << 6)) === (mask << 6) && user.username === file.owner.username)
+        if ((file.permissions & (mask << 6)) === (mask << 6) && user.uid === file.owner.uid)
             return true;
         if ((file.permissions & (mask << 3)) === (mask << 3) && user.groups.includes(file.group))
             return true;
@@ -57,7 +57,7 @@ export class FileSystemController {
                     if (file == null) {
                         throw new Error(`Mismatch between the file system and the database for file: ${fullPath}`);
                     }
-                    return { ...file, owner: file.owner.username };
+                    return { ...file, owner: file.owner.uid };
                 })
             );
             return res.json(content);
@@ -167,7 +167,7 @@ export class FileSystemController {
                 ctime: now,
                 btime: now
             } as File;
-            res.status(200).json({...file, owner: user.username, group: user_group.groupname}).end();
+            res.status(200).json({...file, owner: user.uid, group: user_group.gid}).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'Directory not found' });

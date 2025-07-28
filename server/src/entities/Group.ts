@@ -4,7 +4,7 @@ import { User } from "./User";
 @Entity()
 export class Group {
   @PrimaryColumn()
-  groupname: string;
+  gid: number;
 
   @ManyToMany(() => User, (user) => user.groups)
   @JoinTable()

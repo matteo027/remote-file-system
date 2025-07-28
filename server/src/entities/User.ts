@@ -5,7 +5,7 @@ import { Group } from "./Group";
 @Entity()
 export class User {
   @PrimaryColumn()
-  username: string;
+  uid: number;
 
   @Column()
   password: string;
