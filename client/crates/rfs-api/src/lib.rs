@@ -161,9 +161,8 @@ impl RemoteBackend for Server {
                             match resp.json::<Vec<FileServerResponse>>().await {
                                 Ok(files) => return Ok(files.into_iter().map(|f|{
                                     FsEntry {
-                                        ino: 0,
-                                        path: f.path,
-                                        name: f.name,
+                                        path: f.path.to_string_lossy().to_string(),
+                                        name: f.path.file_name().unwrap_or_default().to_string_lossy().to_string(),
                                         is_dir: f.ty == 1,
                                         size: f.size,
                                         perms: f.permissions,
@@ -217,9 +216,8 @@ impl RemoteBackend for Server {
                         StatusCode::OK => {
                             match resp.json::<FileServerResponse>().await {
                                 Ok(f) => Ok(FsEntry {
-                                    ino: 0,
-                                    path: f.path,
-                                    name: f.name,
+                                    path: f.path.to_string_lossy().to_string(),
+                                    name: f.path.file_name().unwrap_or_default().to_string_lossy().to_string(),
                                     is_dir: f.ty == 1,
                                     size: f.size,
                                     perms: f.permissions,
