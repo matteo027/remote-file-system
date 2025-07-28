@@ -14,24 +14,13 @@ pub struct RemoteFS<B: RemoteBackend> {
 }
 
 impl<B: RemoteBackend> RemoteFS<B> {
-    pub fn new(backend: B) -> Result<Self, i32> {
+    pub fn new(backend: B) -> Self{
         let mut fs = RemoteFS {
             backend,
             next_ino: AtomicU64::new(ROOT_INO + 1), // il primo inode disponibile è ROOT_INO + 1
             path_to_ino: Mutex::new(HashMap::new()),
         };
-        fs.path_to_ino.lock().unwrap().insert(PathBuf::from("/"), ROOT_INO);
-        match fs.backend.list_dir("/") {
-            Ok(entries) => {
-                for dto in entries {
-                    let path = PathBuf::from("/").join(&dto.name);
-                    let ino = fs.next_ino.fetch_add(1, Ordering::Relaxed);
-                    fs.path_to_ino.lock().unwrap().insert(path, ino);
-                }
-                Ok(fs)
-            }
-            Err(_) => Err(EIO),
-        }
+        fs
     }
 
     fn get_local_ino(&self, path: &PathBuf) -> u64 {
@@ -73,8 +62,18 @@ impl<B: RemoteBackend> RemoteFS<B> {
 
 impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
     fn init(&mut self, _req: &Request<'_>, _config: &mut fuser::KernelConfig)  -> Result<(), libc::c_int> {
-        // inizializza lo stato del filesystem, ad esempio caricando le directory radice, già fatto in new
-        Ok(())
+        self.path_to_ino.lock().unwrap().insert(PathBuf::from("/"), ROOT_INO);
+        match self.backend.list_dir("/") {
+            Ok(entries) => {
+                for dto in entries {
+                    let path = PathBuf::from("/").join(&dto.name);
+                    let ino = self.next_ino.fetch_add(1, Ordering::Relaxed);
+                    self.path_to_ino.lock().unwrap().insert(path, ino);
+                }
+                Ok(())
+            }
+            Err(_) => Err(EIO),
+        }
     }
 
     fn destroy(&mut self) {
@@ -266,7 +265,7 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
                         };
                     }
 
-                    // Gestione truncate
+                    // Gestione truncate, da controllare se gestirla separatamenmte in altro modo o va bene qui
                     if let Some(new_size) = size {
                         let current_size = entry.size;
                         if new_size < current_size {

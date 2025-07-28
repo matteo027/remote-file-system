@@ -32,9 +32,78 @@ impl StubBackend {
             gid: 0,
         });
 
+        // Cartelle
+        let dir1 = PathBuf::from("/cartella1");
+        let dir2 = PathBuf::from("/cartella2");
+        entries.insert(dir1.clone(), FsEntry {
+            path: dir1.to_string_lossy().to_string(),
+            name: "cartella1".into(),
+            is_dir: true,
+            ino: 2,
+            size: 0,
+            atime: SystemTime::now(),
+            mtime: SystemTime::now(),
+            ctime: SystemTime::now(),
+            perms: 0o755,
+            nlinks: 2,
+            uid: 0,
+            gid: 0,
+        });
+        entries.insert(dir2.clone(), FsEntry {
+            path: dir2.to_string_lossy().to_string(),
+            name: "cartella2".into(),
+            is_dir: true,
+            ino: 3,
+            size: 0,
+            atime: SystemTime::now(),
+            mtime: SystemTime::now(),
+            ctime: SystemTime::now(),
+            perms: 0o755,
+            nlinks: 2,
+            uid: 0,
+            gid: 0,
+        });
+
+        // File vuoti
+        let file1 = PathBuf::from("/file1.txt");
+        let file2 = PathBuf::from("/file2.txt");
+        entries.insert(file1.clone(), FsEntry {
+            path: file1.to_string_lossy().to_string(),
+            name: "file1.txt".into(),
+            is_dir: false,
+            ino: 4,
+            size: 0,
+            atime: SystemTime::now(),
+            mtime: SystemTime::now(),
+            ctime: SystemTime::now(),
+            perms: 0o644,
+            nlinks: 1,
+            uid: 0,
+            gid: 0,
+        });
+        
+        entries.insert(file2.clone(), FsEntry {
+            path: file2.to_string_lossy().to_string(),
+            name: "file2.txt".into(),
+            is_dir: false,
+            ino: 5,
+            size: 0,
+            atime: SystemTime::now(),
+            mtime: SystemTime::now(),
+            ctime: SystemTime::now(),
+            perms: 0o644,
+            nlinks: 1,
+            uid: 0,
+            gid: 0,
+        });
+
+        let mut data = HashMap::new();
+        data.insert(file1, Vec::new());
+        data.insert(file2, Vec::new());
+
         StubBackend {
             entries: Arc::new(Mutex::new(entries)),
-            data: Arc::new(Mutex::new(HashMap::new())),
+            data: Arc::new(Mutex::new(data)),
             next_ino: Arc::new(Mutex::new(2)),
         }
     }

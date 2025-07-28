@@ -18,7 +18,7 @@ fn main() {
     let options = vec![MountOption::FSName("Remote-FS".to_string()), MountOption::RW];
     eprintln!("Remote-FS mounted at {}", cli.mount_point);
     eprintln!("Remote address: {}", cli.remote_address);
-    fuser::mount2(RemoteFS::new(StubBackend::new()).expect("failed to create RemoteFS"), cli.mount_point, &options).expect("failed to mount");
+    fuser::mount2(RemoteFS::new(StubBackend::new()), cli.mount_point, &options).expect("failed to mount");
     eprintln!("Remote-FS unmounted");
     return;
 }
