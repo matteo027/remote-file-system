@@ -6,8 +6,6 @@ use std::time::{SystemTime};
 pub struct FsEntry {
     /// percorso completo di file o directory
     pub path: String,
-    /// nome (ultima componente di path)
-    pub name: String,
     /// indica se è directory
     pub is_dir: bool,
     /// inode assegnato dal server
@@ -28,6 +26,15 @@ pub struct FsEntry {
     pub uid: u32,
     /// group ID
     pub gid: u32,
+}
+
+pub struct SetAttrRequest {
+    pub mode: Option<u32>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub size: Option<u64>,
+    pub atime: Option<SystemTime>,
+    pub mtime: Option<SystemTime>,
 }
 
 pub struct FileChunk {
@@ -74,4 +81,6 @@ pub trait RemoteBackend: Send + Sync {
     fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError>;
     /// Rinomina un file o directory
     fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FsEntry, BackendError>;
+    /// Imposta gli attributi di un file o directory
+    fn set_attr(&mut self, path: &str, attrs: SetAttrRequest) -> Result<FsEntry, BackendError>;
 }

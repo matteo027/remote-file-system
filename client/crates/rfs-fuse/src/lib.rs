@@ -1,8 +1,10 @@
 use std::{ffi::OsStr, path::{Path,PathBuf}, sync::{Mutex,atomic::{AtomicU64,Ordering}},time::{Duration,SystemTime}};
 use fuser::{Filesystem, Request, ReplyAttr, ReplyEntry, ReplyDirectory, FileAttr, FileType, ReplyEmpty, ReplyCreate, ReplyData, ReplyOpen, ReplyWrite, TimeOrNow};
-use rfs_models::{FsEntry, FileChunk, RemoteBackend};
+use rfs_models::{FsEntry, FileChunk, RemoteBackend, SetAttrRequest};
 use libc::{ENOENT, EIO};
 use std::collections::HashMap;
+
+///! Implementare meglio il mapping degli errori da backend a fuser, tramite una funzione apposita che sfrutta anche EACCES, EEXIST ecc
 
 const TTL: Duration = Duration::from_secs(1);
 const ROOT_INO: u64 = 1;
@@ -10,12 +12,12 @@ const ROOT_INO: u64 = 1;
 pub struct RemoteFS<B: RemoteBackend> {
     backend: B,
     next_ino: AtomicU64, // inode number da allocare, deve essere coerente solo in locale al client
-    path_to_ino: Mutex<HashMap<PathBuf, u64>>, // mappa path → inode
+    path_to_ino: Mutex<HashMap<PathBuf, u64>>, // mappa path → inode, per ora è inefficiente ricerca al contrario di inode to path, magari mettere altra mappa
 }
 
 impl<B: RemoteBackend> RemoteFS<B> {
     pub fn new(backend: B) -> Self{
-        let mut fs = RemoteFS {
+        let fs = RemoteFS {
             backend,
             next_ino: AtomicU64::new(ROOT_INO + 1), // il primo inode disponibile è ROOT_INO + 1
             path_to_ino: Mutex::new(HashMap::new()),
@@ -65,8 +67,8 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         self.path_to_ino.lock().unwrap().insert(PathBuf::from("/"), ROOT_INO);
         match self.backend.list_dir("/") {
             Ok(entries) => {
-                for dto in entries {
-                    let path = PathBuf::from("/").join(&dto.name);
+                for entry in entries {
+                    let path = PathBuf::from("/").join(&entry.path);
                     let ino = self.next_ino.fetch_add(1, Ordering::Relaxed);
                     self.path_to_ino.lock().unwrap().insert(path, ino);
                 }
@@ -85,8 +87,9 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         let dir= self.inode_to_path(parent).unwrap_or_else(|| PathBuf::from("/"));
         match self.backend.list_dir(dir.to_str().unwrap()) {
             Ok(entries) => {
-                if let Some(entry) = entries.iter().find(|e| e.name == name.to_string_lossy()) {
-                    let full = dir.join(&entry.name);
+                if let Some(entry) = entries.iter().find(|e| Path::new(&e.path).file_name().map(|n| n == name).unwrap_or(false)) {
+                    let name = Path::new(&entry.path).file_name().unwrap_or(OsStr::new(""));
+                    let full = dir.join(&name);
                     let ino = self.get_local_ino(&full);
                     let attr = self.entry_to_attr(ino, entry);
                     self.path_to_ino.lock().unwrap().insert(full, ino);
@@ -126,10 +129,11 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
                 }
                 let start = (offset - 2).max(0) as usize;
                 for (i, entry) in entries.iter().enumerate().skip(start) {
-                    let full= dir.join(&entry.name);
+                    let name = Path::new(&entry.path).file_name().unwrap_or(OsStr::new(""));
+                    let full= dir.join(&name);
                     let ino = self.get_local_ino(&full);
                     let kind = if entry.is_dir { FileType::Directory } else { FileType::RegularFile };
-                    let _ = reply.add(ino, (i as i64) + 3, kind, &entry.name);
+                    let _ = reply.add(ino, (i as i64) + 3, kind, &name);
                 }
                 reply.ok();
             }
@@ -244,51 +248,33 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
     }
 
     fn setattr(&mut self, _req: &Request<'_>, ino: u64, mode: Option<u32>, uid: Option<u32>, gid: Option<u32>, size:Option<u64>, atime: Option<TimeOrNow>, mtime: Option<TimeOrNow>, _ctime: Option<SystemTime>, _fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, _flags: Option<u32>, reply: ReplyAttr) {
-        if mode.is_some() || uid.is_some() || gid.is_some() {
-            unimplemented!("Changing mode, uid, gid is not supported in RemoteFS");
-        }
-
-        if let Some(path) = self.inode_to_path(ino) {
-            match self.backend.get_attr(path.to_str().unwrap()) {
-                Ok(mut entry) => {
-                    // Aggiorna atime e mtime
-                    if let Some(atime) = atime {
-                        entry.atime = match atime {
-                            fuser::TimeOrNow::SpecificTime(t) => t,
-                            fuser::TimeOrNow::Now => std::time::SystemTime::now(),
-                        };
-                    }
-                    if let Some(mtime) = mtime {
-                        entry.mtime = match mtime {
-                            fuser::TimeOrNow::SpecificTime(t) => t,
-                            fuser::TimeOrNow::Now => std::time::SystemTime::now(),
-                        };
-                    }
-
-                    // Gestione truncate, da controllare se gestirla separatamenmte in altro modo o va bene qui
-                    if let Some(new_size) = size {
-                        let current_size = entry.size;
-                        if new_size < current_size {
-                            // Tronco i dati
-                            if let Ok(mut chunk) = self.backend.read_chunk(path.to_str().unwrap(), 0, current_size) {
-                                chunk.data.truncate(new_size as usize);
-                                let _ = self.backend.write_chunk(path.to_str().unwrap(), 0, chunk.data);
-                            }
-                        } else if new_size > current_size {
-                            // Espando con zeri
-                            let zeros = vec![0; (new_size - current_size) as usize];
-                            let _ = self.backend.write_chunk(path.to_str().unwrap(), current_size, zeros);
-                        }
-                        entry.size = new_size;
-                    }
-
-                    let attr = self.entry_to_attr(ino, &entry);
-                    reply.attr(&TTL, &attr);
-                }
-                Err(_) => reply.error(libc::EIO),
+        let path = match self.inode_to_path(ino){
+            Some(p) => p,
+            None => {
+                return reply.error(ENOENT);
             }
-        } else {
-            reply.error(libc::ENOENT);
+        };
+        let mut new_set_attr = SetAttrRequest {
+            mode,
+            uid,
+            gid,
+            size,
+            atime: atime.map(|t| match t {
+                TimeOrNow::Now => SystemTime::now(),
+                TimeOrNow::SpecificTime(t) => t,
+            }),
+            mtime: mtime.map(|t| match t {
+                TimeOrNow::Now => SystemTime::now(),
+                TimeOrNow::SpecificTime(t) => t,
+            }),
+        };
+
+        match self.backend.set_attr(path.to_str().unwrap(), new_set_attr) {
+            Ok(entry) => {
+                let attr = self.entry_to_attr(ino, &entry);
+                reply.attr(&TTL, &attr);
+            }
+            Err(_) => reply.error(EIO),
         }
     }
 

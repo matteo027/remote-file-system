@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
     time::SystemTime,
 };
-use rfs_models::{FsEntry, FileChunk, BackendError, RemoteBackend};
+use rfs_models::{FsEntry, FileChunk, BackendError, RemoteBackend, SetAttrRequest};
 
 pub struct StubBackend {
     entries: Arc<Mutex<HashMap<PathBuf, FsEntry>>>,
@@ -19,7 +19,6 @@ impl StubBackend {
 
         entries.insert(root_path.clone(), FsEntry {
             path: "/".into(),
-            name: "/".into(),
             is_dir: true,
             ino: 1,
             size: 0,
@@ -37,7 +36,6 @@ impl StubBackend {
         let dir2 = PathBuf::from("/cartella2");
         entries.insert(dir1.clone(), FsEntry {
             path: dir1.to_string_lossy().to_string(),
-            name: "cartella1".into(),
             is_dir: true,
             ino: 2,
             size: 0,
@@ -51,7 +49,6 @@ impl StubBackend {
         });
         entries.insert(dir2.clone(), FsEntry {
             path: dir2.to_string_lossy().to_string(),
-            name: "cartella2".into(),
             is_dir: true,
             ino: 3,
             size: 0,
@@ -69,7 +66,6 @@ impl StubBackend {
         let file2 = PathBuf::from("/file2.txt");
         entries.insert(file1.clone(), FsEntry {
             path: file1.to_string_lossy().to_string(),
-            name: "file1.txt".into(),
             is_dir: false,
             ino: 4,
             size: 0,
@@ -84,7 +80,6 @@ impl StubBackend {
         
         entries.insert(file2.clone(), FsEntry {
             path: file2.to_string_lossy().to_string(),
-            name: "file2.txt".into(),
             is_dir: false,
             ino: 5,
             size: 0,
@@ -175,7 +170,6 @@ impl RemoteBackend for StubBackend {
 
         let entry = FsEntry {
             path: path.to_string_lossy().to_string(),
-            name: path.file_name().unwrap().to_string_lossy().to_string(),
             is_dir: false,
             ino: self.allocate_ino(),
             size: 0,
@@ -204,7 +198,6 @@ impl RemoteBackend for StubBackend {
 
         let entry = FsEntry {
             path: path.to_string_lossy().to_string(),
-            name: path.file_name().unwrap().to_string_lossy().to_string(),
             is_dir: true,
             ino: self.allocate_ino(),
             size: 0,
@@ -288,11 +281,6 @@ impl RemoteBackend for StubBackend {
         let mut data = self.data.lock().unwrap();
 
         if let Some(mut entry) = entries.remove(&old_path) {
-            entry.name = new_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
             entry.path = new_path.to_string_lossy().into_owned();
 
             entries.insert(new_path.clone(), entry.clone());
@@ -307,5 +295,46 @@ impl RemoteBackend for StubBackend {
                 old_path
             )))
         }
+    }
+
+    fn set_attr(&mut self, path: &str, attrs: SetAttrRequest) -> Result<FsEntry, BackendError> {
+        let path = PathBuf::from(path);
+        let mut entries = self.entries.lock().unwrap();
+        let mut data = self.data.lock().unwrap();
+
+        let mut entry = if let Some(entry) = entries.get(&path) {
+            entry.clone()
+        } else {
+            return Err(BackendError::NotFound(format!("Path {:?} not found", path)));
+        };
+
+        if let Some(m) = attrs.mode {
+            entry.perms = (m & 0o777) as u16;
+        }
+        if let Some(u) = attrs.uid {
+            entry.uid = u;
+        }
+        if let Some(g) = attrs.gid {
+            entry.gid = g;
+        }
+        // Update atime/mtime
+        if let Some(at) = attrs.atime {
+            entry.atime = at;
+        }
+        if let Some(mt) = attrs.mtime {
+            entry.mtime = mt;
+        }
+        if let Some(size) = attrs.size {
+            let buf = data.entry(path.clone()).or_insert_with(Vec::new);
+            let cur = buf.len() as u64;
+            if size < cur {
+                buf.truncate(size as usize);
+            } else if size > cur {
+                buf.resize(size as usize, 0);
+            }
+            entry.size = size;
+        }
+        entries.insert(path.clone(), entry.clone());
+        Ok(entry)
     }
 }

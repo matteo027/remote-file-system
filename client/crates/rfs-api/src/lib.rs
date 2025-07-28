@@ -1,5 +1,5 @@
 use reqwest::cookie::Jar;
-use rfs_models::{RemoteBackend,FsEntry, BackendError, FileChunk};
+use rfs_models::{RemoteBackend,FsEntry, BackendError, FileChunk, SetAttrRequest};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -163,7 +163,6 @@ impl RemoteBackend for Server {
                                 Ok(files) => return Ok(files.into_iter().map(|f|{
                                     FsEntry {
                                         ino: 0,
-                                        name: f.name,
                                         path: f.path,
                                         is_dir: f.ty == 1,
                                         size: f.size,
@@ -217,7 +216,6 @@ impl RemoteBackend for Server {
                             match resp.json::<FileServerResponse>().await {
                                 Ok(f) => Ok(FsEntry {
                                     ino: 0,
-                                    name: f.name,
                                     path: f.path,
                                     is_dir: f.ty == 1,
                                     size: f.size,
@@ -304,6 +302,10 @@ impl RemoteBackend for Server {
 
     fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FsEntry, BackendError> {
         unimplemented!();
+    }
+
+    fn set_attr(&mut self, path: &str, req: SetAttrRequest) -> Result<FsEntry, BackendError> {
+        unimplemented!(); //MANCA LATO SERVER UNA FUNZIONE CHE MI SETTI I METADATI DI UN FILE
     }
 
 }
