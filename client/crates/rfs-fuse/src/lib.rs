@@ -87,9 +87,8 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         let dir= self.inode_to_path(parent).unwrap_or_else(|| PathBuf::from("/"));
         match self.backend.list_dir(dir.to_str().unwrap()) {
             Ok(entries) => {
-                if let Some(entry) = entries.iter().find(|e| Path::new(&e.path).file_name().map(|n| n == name).unwrap_or(false)) {
-                    let name = Path::new(&entry.path).file_name().unwrap_or(OsStr::new(""));
-                    let full = dir.join(&name);
+                if let Some(entry) = entries.iter().find(|e| e.name == name.to_string_lossy()) {
+                    let full = dir.join(&entry.name);
                     let ino = self.get_local_ino(&full);
                     let attr = self.entry_to_attr(ino, entry);
                     self.path_to_ino.lock().unwrap().insert(full, ino);
@@ -129,11 +128,10 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
                 }
                 let start = (offset - 2).max(0) as usize;
                 for (i, entry) in entries.iter().enumerate().skip(start) {
-                    let name = Path::new(&entry.path).file_name().unwrap_or(OsStr::new(""));
-                    let full= dir.join(&name);
+                    let full= dir.join(&entry.name);
                     let ino = self.get_local_ino(&full);
                     let kind = if entry.is_dir { FileType::Directory } else { FileType::RegularFile };
-                    let _ = reply.add(ino, (i as i64) + 3, kind, &name);
+                    let _ = reply.add(ino, (i as i64) + 3, kind, &entry.name);
                 }
                 reply.ok();
             }
@@ -254,7 +252,7 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
                 return reply.error(ENOENT);
             }
         };
-        let mut new_set_attr = SetAttrRequest {
+        let new_set_attr = SetAttrRequest {
             mode,
             uid,
             gid,

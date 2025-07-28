@@ -4,6 +4,8 @@ use std::time::{SystemTime};
 // Modello di dominio per una voce di file system remoto, da utilizzare internamente e per caching
 #[derive(Debug, Clone)]
 pub struct FsEntry {
+    /// nome della voce (file o directory)
+    pub name: String,
     /// percorso completo di file o directory
     pub path: String,
     /// indica se è directory

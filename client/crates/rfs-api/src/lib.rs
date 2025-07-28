@@ -164,6 +164,7 @@ impl RemoteBackend for Server {
                                     FsEntry {
                                         ino: 0,
                                         path: f.path,
+                                        name: f.name,
                                         is_dir: f.ty == 1,
                                         size: f.size,
                                         perms: f.permissions,
@@ -217,6 +218,7 @@ impl RemoteBackend for Server {
                                 Ok(f) => Ok(FsEntry {
                                     ino: 0,
                                     path: f.path,
+                                    name: f.name,
                                     is_dir: f.ty == 1,
                                     size: f.size,
                                     perms: f.permissions,
