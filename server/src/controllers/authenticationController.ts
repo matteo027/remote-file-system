@@ -10,7 +10,7 @@ export class AuthenticationController {
 
     // login
     public login = async (req: Request, res: Response) => {
-        res.json((req.user as User)?.username);
+        res.json((req.user as User)?.uid);
     }
     // logout
     public logout = async (req: Request, res: Response) => {
@@ -22,14 +22,14 @@ export class AuthenticationController {
         res.json(req.user as User);
     }
 
-    public getUser = async (username: string, password: string) => {
+    public getUser = async (uid: number, password: string) => {
         return new Promise(async (res, rej) => {
-            const user: User | null = await AppDataSource.getRepository(User).findOneBy({ username });
+            const user: User | null = await AppDataSource.getRepository(User).findOneBy({ uid });
 
             const hashedPassword = await scryptAsync(password, user?.salt || "", 32) as Buffer;
 
             if (crypto.timingSafeEqual(Buffer.from(user?.password || "", 'hex'), hashedPassword))
-                res({ username: user?.username });
+                res({ uid: user?.uid });
             else res(false);
         })
     };

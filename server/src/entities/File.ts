@@ -7,11 +7,8 @@ export class File {
   @PrimaryColumn()
   path: string;
 
-  @Column()
-  name: string;
-
   @ManyToOne(() => User, (user) => user.files)
-  @JoinColumn({ name: "owner", referencedColumnName: "username" }) // owner column in File refers to User.username
+  @JoinColumn({ name: "owner", referencedColumnName: "uid" })
   owner: User;
 
   @Column()
@@ -20,7 +17,7 @@ export class File {
   @Column()
   permissions: number;
 
-  @ManyToOne(() => Group, (group) => group.groupname, { nullable: true })
+  @ManyToOne(() => Group, (group) => group.gid, { nullable: true })
   @JoinColumn({ name: "group" })
   group: Group;
 

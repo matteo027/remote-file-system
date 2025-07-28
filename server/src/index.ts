@@ -34,7 +34,8 @@ app.use(passport.authenticate('session'));
 passport.use(new LocalStrategy(
   async function verify(username: string, password: string, cb) {
     try {
-      const user = await new AuthenticationController().getUser(username, password);
+      const uid = parseInt(username);
+      const user = await new AuthenticationController().getUser(uid, password);
       if (!user) {
         return cb(null, false, { message: "Incorrect username or password." });
       }
@@ -46,13 +47,13 @@ passport.use(new LocalStrategy(
 
 
 passport.serializeUser((user: any, done) => {
-  done(null, (user as FSUser).username);
+  done(null, (user as FSUser).uid);
 });
 
 
 passport.deserializeUser(async (username: string, done) => {
   try {
-    const user = await AppDataSource.getRepository(FSUser).findOneBy({ username });
+    const user = await AppDataSource.getRepository(FSUser).findOneBy({ uid: parseInt(username) });
     done(null, user || false);
   } catch (err) {
     done(err);
@@ -78,23 +79,22 @@ async function db() {
 
     const userRepo = AppDataSource.getRepository(FSUser);
     const fileRepo = AppDataSource.getRepository(File);
-    const exists = await userRepo.findOneBy({ username: "admin" });
+    const exists = await userRepo.findOneBy({ uid: 5000 });
 
     if (!exists) {
       const admin = userRepo.create({
-        username: "admin",
+        uid: 5000,
         password: "c7be23ada64b3748d4a0aba3604a305535e757f69e5ca67726f013f8303b90fc", // hashed "admin"
         salt: "d610f867285f3cd63aa5ee46e9e1de55"
       });
       await userRepo.save(admin);
       
       
-      // creating the admin (user) folder
-      await fs.mkdir('./file-system/admin', { recursive: true });
+      // creating the 5000 (admin) folder
+      await fs.mkdir('./file-system/5000', { recursive: true });
       let now = Date.now();
       const admin_dir = fileRepo.create({
-        path: path.resolve('./file-system/admin'),
-        name: 'admin',
+        path: '5000',
         owner: admin,
         type: 1,
         permissions: 0o755,

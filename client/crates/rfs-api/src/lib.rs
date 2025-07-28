@@ -29,15 +29,14 @@ struct DirApisPayload {
 }
 #[derive(Serialize)]
 struct LoginPayload {
-    username: String,
+    username: String, // it's the uid
     password: String
 }
 #[derive(Deserialize)]
 struct FileServerResponse {
-    path: String,
-    name: String,
-    owner: String,
-    group: Option<String>,
+    path: Box<Path>,
+    owner: u32,
+    group: Option<u32>,
     #[serde(rename = "type")]
     ty: usize,
     permissions: u16,
@@ -63,7 +62,7 @@ where
 impl Server{
     pub fn new() -> Self{
         Self {
-            runtime: Runtime::new().unwrap(),
+            runtime: Runtime::new().expect("Unable to built a Runtime object"),
             address: Url::from_str("http://localhost:3000/").unwrap(), // meglio passarlo come parametro la metodo (?)
             client: {
                 let cookie_jar = Arc::new(Jar::default());
@@ -172,8 +171,11 @@ impl RemoteBackend for Server {
                                         atime: f.atime,
                                         mtime: f.mtime,
                                         ctime: f.ctime,
-                                        uid: 1000,
-                                        gid: 1000
+                                        uid: f.owner,
+                                        gid: match f.group {
+                                            Some(g) => g,
+                                            None => f.owner
+                                        }
                                     }
                                 }).collect()),
                                 Err(e) => Err(BackendError::BadAnswerFormat)
@@ -211,7 +213,6 @@ impl RemoteBackend for Server {
                 .await;
             match resp {
                 Ok(resp) => {
-                    println!("Stats: {}", resp.status());
                     match resp.status() {
                         StatusCode::OK => {
                             match resp.json::<FileServerResponse>().await {
@@ -266,7 +267,6 @@ impl RemoteBackend for Server {
             
             match resp {
                 Ok(resp) => {
-                    println!("Status: {}", resp.status());
                     match resp.status() {
                         StatusCode::OK => Ok(()),
                         StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
