@@ -111,12 +111,12 @@ impl RemoteBackend for Server {
 
                                     if !self.uid_s.contains_key(&f.owner) {
                                         self.uid_s.insert(f.owner.clone(), self.UID_counter);
-                                        std::fs::create_dir_all("tmp").expect("Unable to create tmp directory");
+                                        std::fs::create_dir_all("/tmp").expect("Unable to create tmp directory");
                                         let mut file = OpenOptions::new()
                                             .append(true)
                                             .create(true)
-                                            .open("tmp/passwd").expect("Unable to open tmp/passwd");
-                                        writeln!(file, "{}:{}", self.UID_counter, f.owner).expect("Unbale to write on tmp/passwd");
+                                            .open("/tmp/passwd").expect("Unable to open /tmp/passwd");
+                                        writeln!(file, "{}:{}", self.UID_counter, f.owner).expect("Unbale to write on /tmp/passwd");
                                         self.UID_counter += 1;
                                     }
                                     let uid = self.uid_s.get(&f.owner).unwrap();
@@ -125,12 +125,12 @@ impl RemoteBackend for Server {
                                         Some(group) => {
                                             if !self.gid_s.contains_key(&group) {
                                                 self.gid_s.insert(group.clone(), self.GID_counter);
-                                                std::fs::create_dir_all("tmp").expect("Unable to create tmp directory");
+                                                std::fs::create_dir_all("/tmp").expect("Unable to create /tmp directory");
                                                 let mut file = OpenOptions::new()
                                                     .append(true)
                                                     .create(true)
-                                                    .open("tmp/group").expect("Unable to open tmp/passwd");
-                                                writeln!(file, "{}:{}", self.GID_counter, group).expect("Unbale to write on tmp/passwd");
+                                                    .open("/tmp/group").expect("Unable to open /tmp/passwd");
+                                                writeln!(file, "{}:{}", self.GID_counter, group).expect("Unbale to write on /tmp/passwd");
                                                 self.GID_counter += 1;
                                             }
                                             gid = self.gid_s.get(&group).unwrap();
