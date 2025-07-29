@@ -10,19 +10,19 @@ const isLoggedIn = (new AuthenticationController).isLoggedIn;
 export function setRoutes(app: Express) {
     app.use('/', router);
 
-    router.get('/api/directories/*', isLoggedIn, filesystemController.readdir);
+    router.get('/api/directories/*path', isLoggedIn, filesystemController.readdir);
 
-    router.post('/api/directories/*', isLoggedIn, filesystemController.mkdir);
-    router.delete('/api/directories/*', isLoggedIn, filesystemController.rmdir);
+    router.post('/api/directories/*path', isLoggedIn, filesystemController.mkdir);
+    router.delete('/api/directories/*path', isLoggedIn, filesystemController.rmdir);
 
-    router.post('/api/files/*', isLoggedIn, filesystemController.create);
-    router.put('/api/files/*', isLoggedIn, filesystemController.write);
-    router.get('/api/files/*', isLoggedIn, filesystemController.open);
-    router.delete('/api/files/*', isLoggedIn, filesystemController.unlink);
+    router.post('/api/files/*path', isLoggedIn, filesystemController.create);
+    router.put('/api/files/*path', isLoggedIn, filesystemController.write);
+    router.get('/api/files/*path', isLoggedIn, filesystemController.open);
+    router.delete('/api/files/*path', isLoggedIn, filesystemController.unlink);
 
-    router.put('/api/files/*', isLoggedIn, filesystemController.rename); // rename
-    router.put('/api/mod/*', isLoggedIn, filesystemController.setattr);
-    router.get('/api/mod/*', isLoggedIn, filesystemController.getattr);
+    router.put('/api/files/*path', isLoggedIn, filesystemController.rename); // rename
+    router.put('/api/mod/*path', isLoggedIn, filesystemController.setattr);
+    router.get('/api/mod/*path', isLoggedIn, filesystemController.getattr);
 
-    
+
 }

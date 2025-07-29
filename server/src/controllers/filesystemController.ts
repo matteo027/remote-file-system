@@ -43,10 +43,10 @@ export class FileSystemController {
     }
 
     public readdir = async (req: Request, res: Response) => {
-        if (req.params[0] == undefined)
+        if (req.params.path == undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
-        
+        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
+
         try {
             const files = await fs.readdir(path_manipulator.resolve(FS_PATH, path));
             const content = await Promise.all(
@@ -68,9 +68,9 @@ export class FileSystemController {
 
     public mkdir = async (req: Request, res: Response) => {
 
-        if (req.params[0] == undefined)
+        if (req.params.path == undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
         const now = Date.now();
         const user: User = req.user as User;
         if (user == null) {
@@ -105,15 +105,15 @@ export class FileSystemController {
     }
 
     public rmdir = async (req: Request, res: Response) => {
-        if (req.params[0] === undefined)
+        if (req.params.path === undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
-        
+        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
+
         try {
             const dir: File = await fileRepo.findOne({ where: { path }, relations: ['owner'] }) as File;
             if (!this.has_permissions(dir, 1, req.user as User))
                 return res.status(403).json({ error: 'EACCES', message: 'You have not the permission to remove the directory ' + path });
-            
+
             if (dir.type != 1) {
                 return res.status(400).json({ error: 'ENOTDIR', message: 'The specified path is not a directory' });
             }
@@ -131,10 +131,10 @@ export class FileSystemController {
     }
 
     public create = async (req: Request, res: Response) => {
-        
-        if (req.params[0] === undefined)
+
+        if (req.params.path === undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
         const now = Date.now();
         const user: User = req.user as User;
         if (user === null) {
@@ -142,10 +142,10 @@ export class FileSystemController {
         }
 
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
-        
+
         try {
             await fs.writeFile(path_manipulator.resolve(FS_PATH, path), "", { flag: "wx" });
-            
+
             const file: File = {
                 path: path,
                 owner: user,
@@ -159,7 +159,7 @@ export class FileSystemController {
                 btime: now
             } as File;
             await fileRepo.save(file);
-            res.status(200).json({...file, owner: user.uid, group: user_group?.gid});
+            res.status(200).json({ ...file, owner: user.uid, group: user_group?.gid });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'Directory not found' });
@@ -172,9 +172,9 @@ export class FileSystemController {
     }
 
     public write = async (req: Request, res: Response) => {
-        if (req.params[0] === undefined || req.body.text === undefined)
+        if (req.params.path === undefined || req.body.text === undefined)
             return res.status(400).json({ error: 'Bad format: path or text parameter is missing' });
-        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
         const text: string = req.body.text;
         const user: User = req.user as User;
         if (user === null) {
@@ -194,7 +194,7 @@ export class FileSystemController {
 
             await fs.writeFile(path_manipulator.resolve(FS_PATH, path), text, { flag: "w" });
 
-            res.status(200).json({...file, owner: user.uid, group: user_group?.gid});
+            res.status(200).json({ ...file, owner: user.uid, group: user_group?.gid });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -208,18 +208,18 @@ export class FileSystemController {
 
     // returns an object containing the field "data", associated to the file content
     public open = async (req: Request, res: Response) => {
-        
-        if (req.params[0] === undefined)
+
+        if (req.params.path === undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
 
         try {
             const file: File = await fileRepo.findOne({
                 where: { path },
                 relations: ['owner', 'group']
             }) as File;
-            if(file === null)
-                return res.status(404).json({ error: 'File not found' });res.status(404).json({ error: 'File not found' });
+            if (file === null)
+                return res.status(404).json({ error: 'File not found' }); res.status(404).json({ error: 'File not found' });
             if (!this.has_permissions(file, 0, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to read the content the file ' + path });
 
@@ -237,9 +237,9 @@ export class FileSystemController {
     }
 
     public unlink = async (req: Request, res: Response) => {
-        if (req.params[0] == undefined)
+        if (req.params.path == undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
         const user: User = req.user as User;
         if (user === null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
@@ -260,7 +260,7 @@ export class FileSystemController {
 
             await fs.rm(path_manipulator.resolve(FS_PATH, path));
             await fileRepo.remove(file);
-            res.status(200).json({...file, owner: user.uid, group: user_group?.gid});
+            res.status(200).json({ ...file, owner: user.uid, group: user_group?.gid });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -271,17 +271,17 @@ export class FileSystemController {
     }
 
     public rename = async (req: Request, res: Response) => {
-        
-        if (req.params[0] === undefined || req.body.new_name === undefined )
+
+        if (req.params.path === undefined || req.body.new_name === undefined)
             return res.status(400).json({ error: 'Bad format: old path or new file name parameter is missing' });
-        const old_path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        const old_path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
         const new_name: string = req.body.new_name;
         const new_path: string = path_manipulator.join(path_manipulator.dirname(old_path), new_name);
 
         try {
 
             const file: File = await fileRepo.findOne({
-                where: { path : old_path },
+                where: { path: old_path },
                 relations: ['owner', 'group']
             }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
@@ -294,7 +294,7 @@ export class FileSystemController {
                 path: new_path
             });
             await fileRepo.save(new_file);
-            res.status(200).json({...new_file, owner: new_file.owner.uid, group: new_file.group?.gid});
+            res.status(200).json({ ...new_file, owner: new_file.owner.uid, group: new_file.group?.gid });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -307,7 +307,7 @@ export class FileSystemController {
     }
 
     public setattr = async (req: Request, res: Response) => {
-        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
         const new_mod: Mode = parseInt(req.body.new_mod);
         if (path == undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
@@ -334,7 +334,7 @@ export class FileSystemController {
             await fileRepo.save(file);
 
             await fs.chmod(path_manipulator.join(FS_PATH, path), new_mod);
-            res.status(200).json({...file, owner: file.owner.uid, group: file.group?.gid});
+            res.status(200).json({ ...file, owner: file.owner.uid, group: file.group?.gid });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
