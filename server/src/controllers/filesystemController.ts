@@ -346,4 +346,33 @@ export class FileSystemController {
         }
     }
 
+    public getattr = async (req: Request, res: Response) => {
+        const path: string = req.params[0].startsWith('/') ? req.params[0].slice(1) : req.params[0];
+        
+        if (path == undefined)
+            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
+
+        
+
+        try {
+
+            let file: File = await fileRepo.findOne({
+                where: { path },
+                relations: ['owner', 'group']
+            }) as File;
+            if (!this.has_permissions(file, 1, req.user as User))
+                return res.status(403).json({ error: 'You have not the permission to chane mod of the file ' + path });
+
+            res.status(200).json({...file, owner: file.owner.uid, group: file.group?.gid});
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                res.status(404).json({ error: 'File not found' });
+            } else if (err.code === 'EACCES') {
+                res.status(403).json({ error: 'Access denied' });
+            } else {
+                res.status(500).json({ error: 'Not possible to change mod of ' + path, details: err });
+            }
+        }
+    }
+
 }
