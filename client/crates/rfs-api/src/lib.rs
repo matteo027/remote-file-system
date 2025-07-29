@@ -84,7 +84,7 @@ impl RemoteBackend for Server {
             let request_url = self.address.clone()
                 .join("api/directories/").unwrap()
                 .join(path.strip_prefix('/').unwrap_or(path)).unwrap();
-            
+            println!("url: {}", request_url);
             let resp = self.client
                 .get(request_url)
                 .send()
@@ -92,6 +92,7 @@ impl RemoteBackend for Server {
             
             match resp {
                 Ok(resp) => { 
+                    println!("status: {}", resp.status());
                     match resp.status() {
                         StatusCode::OK => {
                             match resp.json::<Vec<FileServerResponse>>().await {

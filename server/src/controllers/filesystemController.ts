@@ -43,9 +43,10 @@ export class FileSystemController {
     }
 
     public readdir = async (req: Request, res: Response) => {
-        if (req.params.path == undefined)
-            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
+        
+        const path: string = Array.isArray(req.params.path)
+            ? req.params.path.join('/')
+            : '';
 
         try {
             const files = await fs.readdir(path_manipulator.resolve(FS_PATH, path));
@@ -53,7 +54,7 @@ export class FileSystemController {
                 files.map(async (file_name) => {
                     const fullPath = path_manipulator.join(path, file_name);
 
-                    const file: File = await fileRepo.findOne({ where: { path: fullPath }, relations: ['owner'] }) as File;
+                    const file: File = await fileRepo.findOne({ where: { path: fullPath }, relations: ['owner', 'group'] }) as File;
                     if (file == null) {
                         throw new Error(`Mismatch between the file system and the database for file: ${fullPath}`);
                     }
@@ -61,16 +62,19 @@ export class FileSystemController {
                 })
             );
             return res.json(content);
-        } catch (err) {
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                res.status(404).json({ error: 'Directory not found' });
+            }
             return res.status(500).json({ error: 'Not possible to read from the folder ' + path_manipulator.resolve(FS_PATH, path), details: err });
         }
     }
 
     public mkdir = async (req: Request, res: Response) => {
 
-        if (req.params.path == undefined)
-            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
+        const path: string = Array.isArray(req.params.path)
+            ? req.params.path.join('/')
+            : '';
         const now = Date.now();
         const user: User = req.user as User;
         if (user == null) {
@@ -80,7 +84,9 @@ export class FileSystemController {
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
 
         try {
+            console.log(req.params.path);
             await fs.mkdir(path_manipulator.resolve(FS_PATH, path));
+            console.log(path + " *2");
             const directory = {
                 path: path,
                 owner: user,
@@ -105,9 +111,9 @@ export class FileSystemController {
     }
 
     public rmdir = async (req: Request, res: Response) => {
-        if (req.params.path === undefined)
-            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
+        const path: string = Array.isArray(req.params.path)
+            ? req.params.path.join('/')
+            : '';
 
         try {
             const dir: File = await fileRepo.findOne({ where: { path }, relations: ['owner'] }) as File;
@@ -132,9 +138,10 @@ export class FileSystemController {
 
     public create = async (req: Request, res: Response) => {
 
-        if (req.params.path === undefined)
-            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
+        const path: string = Array.isArray(req.params.path)
+            ? req.params.path.join('/')
+            : '';
+        
         const now = Date.now();
         const user: User = req.user as User;
         if (user === null) {
@@ -172,9 +179,9 @@ export class FileSystemController {
     }
 
     public write = async (req: Request, res: Response) => {
-        if (req.params.path === undefined || req.body.text === undefined)
-            return res.status(400).json({ error: 'Bad format: path or text parameter is missing' });
-        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
+        const path: string = Array.isArray(req.params.path)
+            ? req.params.path.join('/')
+            : '';
         const text: string = req.body.text;
         const user: User = req.user as User;
         if (user === null) {
@@ -209,10 +216,10 @@ export class FileSystemController {
     // returns an object containing the field "data", associated to the file content
     public open = async (req: Request, res: Response) => {
 
-        if (req.params.path === undefined)
-            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
-
+        const path: string = Array.isArray(req.params.path)
+            ? req.params.path.join('/')
+            : '';
+        
         try {
             const file: File = await fileRepo.findOne({
                 where: { path },
@@ -237,9 +244,9 @@ export class FileSystemController {
     }
 
     public unlink = async (req: Request, res: Response) => {
-        if (req.params.path == undefined)
-            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
-        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
+        const path: string = Array.isArray(req.params.path)
+            ? req.params.path.join('/')
+            : '';
         const user: User = req.user as User;
         if (user === null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
@@ -272,9 +279,14 @@ export class FileSystemController {
 
     public rename = async (req: Request, res: Response) => {
 
-        if (req.params.path === undefined || req.body.new_name === undefined)
-            return res.status(400).json({ error: 'Bad format: old path or new file name parameter is missing' });
-        const old_path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
+        if (req.body.new_name === undefined)
+            return res.status(400).json({ error: 'Bad format: new file name parameter is missing' });
+        let old_path: string = req.params.path;
+        if (req.params.path !== undefined)
+            old_path = req.params.path[0].startsWith('/') ? req.params.path[0].slice(1) : req.params.path[0];
+        else
+            old_path = '';
+        
         const new_name: string = req.body.new_name;
         const new_path: string = path_manipulator.join(path_manipulator.dirname(old_path), new_name);
 
@@ -307,7 +319,9 @@ export class FileSystemController {
     }
 
     public setattr = async (req: Request, res: Response) => {
-        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
+        const path: string = Array.isArray(req.params.path)
+            ? req.params.path.join('/')
+            : '';
         const new_mod: Mode = parseInt(req.body.new_mod);
         if (path == undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
@@ -347,8 +361,10 @@ export class FileSystemController {
     }
 
     public getattr = async (req: Request, res: Response) => {
-        const path: string = req.params.path.startsWith('/') ? req.params.path.slice(1) : req.params.path;
-
+        const path: string = Array.isArray(req.params.path)
+            ? req.params.path.join('/')
+            : '';
+        
         if (path == undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
 
