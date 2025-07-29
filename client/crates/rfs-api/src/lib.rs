@@ -82,14 +82,11 @@ impl RemoteBackend for Server {
 
         let api_result = self.runtime.block_on(async {
             let request_url = self.address.clone()
-                .join("api/directories").unwrap();
-            let body = DirApisPayload {
-                path: String::from(path.strip_prefix('/').unwrap_or(path))
-            };
+                .join("api/directories/").unwrap()
+                .join(path.strip_prefix('/').unwrap_or(path)).unwrap();
             
             let resp = self.client
                 .get(request_url)
-                .json(&body)
                 .send()
                 .await;
             
@@ -137,18 +134,13 @@ impl RemoteBackend for Server {
 
         self.check_and_authenticate()?;
 
-        let body = DirApisPayload {
-            path: String::from(Path::new(&entry.name).parent().unwrap_or(Path::new("")).to_str().unwrap_or(""))
-        };
-
         let api_result = self.runtime.block_on(async {
             let request_url = self.address.clone()
                 .join("api/directories/").unwrap()
-                .join(Path::new(&entry.name).file_name().unwrap_or_default().to_str().unwrap_or("")).unwrap();
+                .join(&entry.name.strip_prefix('/').unwrap_or(&entry.name)).unwrap();
             
             let resp =self.client
                 .post(request_url)
-                .json(&body)
                 .send()
                 .await;
             match resp {
@@ -172,18 +164,13 @@ impl RemoteBackend for Server {
         
         self.check_and_authenticate()?;
 
-        let body = DirApisPayload {
-            path: String::from(Path::new(path).parent().unwrap_or(Path::new("")).to_str().unwrap_or(""))
-        };
-
         let api_result = self.runtime.block_on(async {
             let request_url = self.address.clone()
                 .join("api/directories/").unwrap()
-                .join(Path::new(path).file_name().unwrap_or_default().to_str().unwrap_or("")).unwrap();
+                .join(path.strip_prefix('/').unwrap_or(path)).unwrap();
             
             let resp =self.client
                 .delete(request_url)
-                .json(&body)
                 .send()
                 .await;
             
