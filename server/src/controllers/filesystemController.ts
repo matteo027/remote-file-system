@@ -94,7 +94,7 @@ export class FileSystemController {
                 btime: now
             } as File;
             await fileRepo.save(directory);
-            return res.status(200).end();
+            return res.status(200).json({...directory, owner: user.uid, group: user_group?.gid});
         } catch (err: any) {
             if (err.code === 'EEXIST') { // Error Exists
                 return res.status(409).json({ error: 'Folder already exists' });
@@ -194,7 +194,7 @@ export class FileSystemController {
 
             await fs.writeFile(path_manipulator.resolve(FS_PATH, path), text, { flag: "w" });
 
-            res.status(200).json({ ...file, owner: user.uid, group: user_group?.gid });
+            res.status(200).json({ bytes: req.body.text.length });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -224,7 +224,7 @@ export class FileSystemController {
                 return res.status(403).json({ error: 'You have not the permission to read the content the file ' + path });
 
             const content = await fs.readFile(path_manipulator.resolve(FS_PATH, path), { flag: "r" });
-            res.json({ ...file, owner: file.owner.uid, group: file.group?.gid, data: content.toString() });
+            res.json({ bytes: content.toString(), offset: 0 });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -260,7 +260,7 @@ export class FileSystemController {
 
             await fs.rm(path_manipulator.resolve(FS_PATH, path));
             await fileRepo.remove(file);
-            res.status(200).json({ ...file, owner: user.uid, group: user_group?.gid });
+            res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
