@@ -1,14 +1,12 @@
 use clap::Parser;
-use fuser::{MountOption,spawn_mount2};
+use fuser::MountOption;
+use rfs_api::{Server, stub::StubBackend};
 use rfs_fuse::RemoteFS;
-use rfs_api::{Server};
-use rfs_models::RemoteBackend;
-
 
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
 struct Cli {
-    #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
+    #[arg(short, long, default_value = "/home/andrea/mnt/remote")]
     mount_point: String,
 
     #[arg(short, long, default_value = "http://localhost:3000")]
@@ -17,10 +15,14 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
-    let options = vec![MountOption::FSName("Remote-FS".to_string()), MountOption::RW];
+    let options = vec![
+        MountOption::FSName("Remote-FS".to_string()),
+        MountOption::RW,
+    ];
     eprintln!("Remote-FS mounted at {}", cli.mount_point);
     eprintln!("Remote address: {}", cli.remote_address);
-    fuser::mount2(RemoteFS::new(Server::new()),cli.mount_point,&options,).expect("failed to mount");
+    fuser::mount2(RemoteFS::new(Server::new()), cli.mount_point, &options)
+        .expect("failed to mount");
     eprintln!("Remote-FS unmounted");
     return;
 }
