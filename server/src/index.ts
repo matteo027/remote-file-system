@@ -94,7 +94,18 @@ async function db() {
       await fs.mkdir('./file-system/5000', { recursive: true });
       let now = Date.now();
       const admin_dir = fileRepo.create({
-        path: '5000',
+        path: '/5000',
+        owner: admin,
+        type: 1,
+        permissions: 0o755,
+        size: 0,
+        atime: now,
+        btime: now,
+        ctime: now,
+        mtime: now,
+      } as File);
+      const root_dir = fileRepo.create({
+        path: '/',
         owner: admin,
         type: 1,
         permissions: 0o755,
@@ -105,6 +116,7 @@ async function db() {
         mtime: now,
       } as File);
       fileRepo.save(admin_dir);
+      fileRepo.save(root_dir);
     }
 
   } catch (error) {

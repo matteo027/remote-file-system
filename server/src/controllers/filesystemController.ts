@@ -1,17 +1,30 @@
 import { Request, Response } from 'express';
 import * as fs from 'node:fs/promises';
 import type { Mode } from 'node:fs';
-import path_manipulator from 'path';
+import path_manipulator from 'node:path';
 import { AppDataSource } from '../data-source';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import { Group } from '../entities/Group';
-import { AuthenticationController } from './authenticationController';
 
-const FS_PATH = path_manipulator.join(__dirname, '..', '..', 'file-system');
+const FS_ROOT = path_manipulator.join(__dirname, '..', '..', 'file-system');
 const fileRepo = AppDataSource.getRepository(File);
 const userRepo = AppDataSource.getRepository(User);
 const groupRepo = AppDataSource.getRepository(Group);
+
+function normalizePath(input?: string | string[]): string {
+    const raw = Array.isArray(input) ? input.join('/'): (input ?? '');
+    const replaced = raw.replace(/\\/g, '/');
+    // 2) se è vuoto, considera subito la root "/"
+    const toNormalize = replaced === '' ? '/' : replaced;
+    // 3) normalizza POSIX (rimuove ".", "..", doppi slash, ecc.)
+    return path_manipulator.posix.normalize(toNormalize);
+}
+
+function toFsPath(dbPath: string): string {
+  const segments = dbPath === '/' ? [] : dbPath.slice(1).split('/');
+  return path_manipulator.join(FS_ROOT, ...segments);
+}
 
 export class FileSystemController {
 
@@ -43,20 +56,16 @@ export class FileSystemController {
     }
 
     public readdir = async (req: Request, res: Response) => {
-        
-        const path: string = Array.isArray(req.params.path)
-            ? req.params.path.join('/')
-            : '';
-
+        const dbPath    = normalizePath(req.params.path);
+        const fullFsPath = toFsPath(dbPath);
         try {
-            const files = await fs.readdir(path_manipulator.resolve(FS_PATH, path));
+            const names = await fs.readdir(fullFsPath);
             const content = await Promise.all(
-                files.map(async (file_name) => {
-                    const fullPath = path_manipulator.join(path, file_name);
-
-                    const file: File = await fileRepo.findOne({ where: { path: fullPath }, relations: ['owner', 'group'] }) as File;
-                    if (file == null) {
-                        throw new Error(`Mismatch between the file system and the database for file: ${fullPath}`);
+                names.map(async (name) => {
+                    const childPath = dbPath === '/' ? `/${name}` : `${dbPath}/${name}`;
+                    const file: File = await fileRepo.findOne({ where: { path: childPath }, relations: ['owner', 'group'] }) as File;
+                    if (!file) {
+                        throw new Error(`Mismatch between the file system and the database for file: ${childPath}`);
                     }
                     return { ...file, owner: file.owner.uid, group: file.group?.gid };
                 })
@@ -64,17 +73,16 @@ export class FileSystemController {
             return res.json(content);
         } catch (err: any) {
             if (err.code === 'ENOENT') {
-                res.status(404).json({ error: 'Directory not found' });
+                return res.status(404).json({ error: 'Directory not found' });
             }
-            return res.status(500).json({ error: 'Not possible to read from the folder ' + path_manipulator.resolve(FS_PATH, path), details: err });
+            return res.status(500).json({ error: 'Not possible to read from the folder ' + dbPath, details: err });
         }
     }
 
     public mkdir = async (req: Request, res: Response) => {
+        const dbPath    = normalizePath(req.params.path);
+        const fullFsPath = toFsPath(dbPath);
 
-        const path: string = Array.isArray(req.params.path)
-            ? req.params.path.join('/')
-            : '';
         const now = Date.now();
         const user: User = req.user as User;
         if (user == null) {
@@ -84,9 +92,9 @@ export class FileSystemController {
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
 
         try {
-            await fs.mkdir(path_manipulator.resolve(FS_PATH, path));
+            await fs.mkdir(fullFsPath);
             const directory = {
-                path: path,
+                path: dbPath,
                 owner: user,
                 type: 1,
                 permissions: 0o755,
@@ -103,42 +111,40 @@ export class FileSystemController {
             if (err.code === 'EEXIST') { // Error Exists
                 return res.status(409).json({ error: 'Folder already exists' });
             } else {
-                return res.status(500).json({ error: 'Not possible to create the folder ' + path, details: err });
+                return res.status(500).json({ error: 'Not possible to create the folder ' + dbPath, details: err });
             }
         }
     }
 
     public rmdir = async (req: Request, res: Response) => {
-        const path: string = Array.isArray(req.params.path)
-            ? req.params.path.join('/')
-            : '';
+        const dbPath    = normalizePath(req.params.path);
+        const fullFsPath = toFsPath(dbPath);
 
         try {
-            const dir: File = await fileRepo.findOne({ where: { path }, relations: ['owner'] }) as File;
+            const dir: File = await fileRepo.findOne({ where: { path: dbPath }, relations: ['owner'] }) as File;
             if (!this.has_permissions(dir, 1, req.user as User))
-                return res.status(403).json({ error: 'EACCES', message: 'You have not the permission to remove the directory ' + path });
+                return res.status(403).json({ error: 'EACCES', message: 'You have not the permission to remove the directory ' + dbPath });
 
             if (dir.type != 1) {
                 return res.status(400).json({ error: 'ENOTDIR', message: 'The specified path is not a directory' });
             }
 
-            await fs.rm(path_manipulator.resolve(FS_PATH, path), { recursive: true }); // fs.rmdirwill be depreacted
+            await fs.rm(fullFsPath, { recursive: true }); // fs.rmdirwill be depreacted
             await fileRepo.remove(dir);
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'Directory not found' });
             } else {
-                res.status(500).json({ error: 'Not possible to remove the directory ' + path, details: err });
+                res.status(500).json({ error: 'Not possible to remove the directory ' + dbPath, details: err });
             }
         }
     }
 
     public create = async (req: Request, res: Response) => {
 
-        const path: string = Array.isArray(req.params.path)
-            ? req.params.path.join('/')
-            : '';
+        const dbPath    = normalizePath(req.params.path);
+        const fullFsPath = toFsPath(dbPath);
         
         const now = Date.now();
         const user: User = req.user as User;
@@ -149,10 +155,10 @@ export class FileSystemController {
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
 
         try {
-            await fs.writeFile(path_manipulator.resolve(FS_PATH, path), "", { flag: "wx" });
+            await fs.writeFile(fullFsPath, "", { flag: "wx" });
 
             const file: File = {
-                path: path,
+                path: dbPath,
                 owner: user,
                 type: 1,
                 permissions: 0o755,
@@ -171,15 +177,15 @@ export class FileSystemController {
             } else if (err.code === 'EEXIST') {
                 res.status(409).json({ error: 'File already exists' });
             } else {
-                res.status(500).json({ error: 'Not possible to create the file ' + path, details: err });
+                res.status(500).json({ error: 'Not possible to create the file ' + dbPath, details: err });
             }
         }
     }
 
     public write = async (req: Request, res: Response) => {
-        const path: string = Array.isArray(req.params.path)
-            ? req.params.path.join('/')
-            : '';
+        const dbPath    = normalizePath(req.params.path);
+        const fullFsPath = toFsPath(dbPath);
+
         const text: string = req.body.text;
         const user: User = req.user as User;
         if (user === null) {
@@ -191,13 +197,13 @@ export class FileSystemController {
         try {
 
             const file: File = await fileRepo.findOne({
-                where: { path },
+                where: { path:dbPath },
                 relations: ['owner', 'group']
             }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to write on the file ' + path });
+                return res.status(403).json({ error: 'You have not the permission to write on the file ' + dbPath });
 
-            await fs.writeFile(path_manipulator.resolve(FS_PATH, path), text, { flag: "w" });
+            await fs.writeFile(fullFsPath, text, { flag: "w" });
 
             res.status(200).json({ bytes: req.body.text.length });
         } catch (err: any) {
@@ -206,29 +212,27 @@ export class FileSystemController {
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to write on file ' + path, details: err });
+                res.status(500).json({ error: 'Not possible to write on file ' + dbPath, details: err });
             }
         }
     }
 
     // returns an object containing the field "data", associated to the file content
     public open = async (req: Request, res: Response) => {
+        const dbPath    = normalizePath(req.params.path);
+        const fullFsPath = toFsPath(dbPath);
 
-        const path: string = Array.isArray(req.params.path)
-            ? req.params.path.join('/')
-            : '';
-        
         try {
             const file: File = await fileRepo.findOne({
-                where: { path },
+                where: { path: dbPath },
                 relations: ['owner', 'group']
             }) as File;
             if (file === null)
                 return res.status(404).json({ error: 'File not found' }); res.status(404).json({ error: 'File not found' });
             if (!this.has_permissions(file, 0, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + path });
+                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + dbPath });
 
-            const content = await fs.readFile(path_manipulator.resolve(FS_PATH, path), { flag: "r" });
+            const content = await fs.readFile(fullFsPath, { flag: "r" });
             res.json({ bytes: content.toString(), offset: 0 });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -236,15 +240,15 @@ export class FileSystemController {
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to read the file ' + path, details: err });
+                res.status(500).json({ error: 'Not possible to read the file ' + dbPath, details: err });
             }
         }
     }
 
     public unlink = async (req: Request, res: Response) => {
-        const path: string = Array.isArray(req.params.path)
-            ? req.params.path.join('/')
-            : '';
+        const dbPath    = normalizePath(req.params.path);
+        const fullFsPath = toFsPath(dbPath);
+
         const user: User = req.user as User;
         if (user === null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
@@ -253,7 +257,7 @@ export class FileSystemController {
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
         try {
             const file: File = await fileRepo.findOne({
-                where: { path },
+                where: { path: dbPath },
                 relations: ['owner', 'group']
             }) as File;
 
@@ -261,16 +265,16 @@ export class FileSystemController {
                 return res.status(404).json({ error: 'File metadata not found in database' });
             }
             if (!this.has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ err: 'You have not the permission to delete the file ' + path });
+                return res.status(403).json({ err: 'You have not the permission to delete the file ' + dbPath });
 
-            await fs.rm(path_manipulator.resolve(FS_PATH, path));
+            await fs.rm(fullFsPath, { force: true }); // force is used to ignore errors if the file does not exist
             await fileRepo.remove(file);
             res.status(200).end();
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
             } else {
-                res.status(500).json({ error: 'Not possible to remove the file ' + path, details: err });
+                res.status(500).json({ error: 'Not possible to remove the file ' + dbPath, details: err });
             }
         }
     }
@@ -279,29 +283,36 @@ export class FileSystemController {
 
         if (req.body.new_name === undefined)
             return res.status(400).json({ error: 'Bad format: new file name parameter is missing' });
-        let old_path: string = req.params.path;
-        if (req.params.path !== undefined)
-            old_path = req.params.path[0].startsWith('/') ? req.params.path[0].slice(1) : req.params.path[0];
-        else
-            old_path = '';
-        
-        const new_name: string = req.body.new_name;
-        const new_path: string = path_manipulator.join(path_manipulator.dirname(old_path), new_name);
+
+        const dbOldPath=normalizePath(req.params.path);
+        const dbNewPath=normalizePath(req.body.new_name);
+
+        if (dbOldPath === '/') {
+            return res
+                .status(400)
+                .json({ error: 'Cannot rename the root directory' });
+        }
+
+        const fullOldFsPath = toFsPath(dbOldPath);
+        const fullNewFsPath = toFsPath(dbNewPath);
 
         try {
-
             const file: File = await fileRepo.findOne({
-                where: { path: old_path },
+                where: { path: dbOldPath },
                 relations: ['owner', 'group']
             }) as File;
-            if (!this.has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to rename on the file ' + old_path });
+            if (!file) {
+                return res.status(404).json({ error: 'File metadata not found' });
+            }
 
-            await fs.rename(path_manipulator.join(FS_PATH, old_path), path_manipulator.join(FS_PATH, new_path));
+            if (!this.has_permissions(file, 1, req.user as User))
+                return res.status(403).json({ error: 'You have not the permission to rename on the file ' + dbOldPath });
+
+            await fs.rename(fullOldFsPath, fullNewFsPath);
             await fileRepo.remove(file);
             const new_file = fileRepo.create({
                 ...file,
-                path: new_path
+                path: dbNewPath
             });
             await fileRepo.save(new_file);
             res.status(200).json({ ...new_file, owner: new_file.owner.uid, group: new_file.group?.gid });
@@ -311,17 +322,16 @@ export class FileSystemController {
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to rename ' + old_path, details: err });
+                res.status(500).json({ error: 'Not possible to rename ' + dbOldPath, details: err });
             }
         }
     }
 
     public setattr = async (req: Request, res: Response) => {
-        const path: string = Array.isArray(req.params.path)
-            ? req.params.path.join('/')
-            : '';
+        const dbPath = normalizePath(req.params.path);
+        const fullFsPath = toFsPath(dbPath);
         const new_mod: Mode = parseInt(req.body.new_mod);
-        if (path == undefined)
+        if (dbPath == undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
 
         if (isNaN(new_mod)) {
@@ -335,17 +345,17 @@ export class FileSystemController {
         try {
 
             let file: File = await fileRepo.findOne({
-                where: { path },
+                where: { path: dbPath },
                 relations: ['owner', 'group']
             }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to chane mod of the file ' + path });
+                return res.status(403).json({ error: 'You have not the permission to change mod of the file ' + dbPath });
 
 
             file.permissions = new_mod;
             await fileRepo.save(file);
 
-            await fs.chmod(path_manipulator.join(FS_PATH, path), new_mod);
+            await fs.chmod(fullFsPath, new_mod);
             res.status(200).json({ ...file, owner: file.owner.uid, group: file.group?.gid });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -353,29 +363,26 @@ export class FileSystemController {
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to change mod of ' + path, details: err });
+                res.status(500).json({ error: 'Not possible to change mod of ' + dbPath, details: err });
             }
         }
     }
 
     public getattr = async (req: Request, res: Response) => {
-        const path: string = Array.isArray(req.params.path)
-            ? req.params.path.join('/')
-            : '';
-        
-        if (path == undefined)
+        const dbPath    = normalizePath(req.params.path);
+
+        if (dbPath == undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
 
-
-
         try {
+            console.log(`Getting attributes for: ${dbPath}`);
 
             let file: File = await fileRepo.findOne({
-                where: { path },
+                where: { path: dbPath },
                 relations: ['owner', 'group']
             }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to chane mod of the file ' + path });
+                return res.status(403).json({ error: 'You have not the permission to visualize the file ' + dbPath });
 
             res.status(200).json({ ...file, owner: file.owner.uid, group: file.group?.gid });
         } catch (err: any) {
@@ -384,7 +391,8 @@ export class FileSystemController {
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to change mod of ' + path, details: err });
+                console.error(err);
+                res.status(500).json({ error: 'Not possible to perform the operation ' + dbPath, details: err });
             }
         }
     }

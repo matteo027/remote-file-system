@@ -2,14 +2,12 @@ use reqwest::cookie::Jar;
 use reqwest::{Client, StatusCode, Url};
 use rfs_models::{BackendError, FileEntry, RemoteBackend};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::ffi::OsStr;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
-
-pub mod stub;
-use stub::StubBackend;
 
 #[derive(Deserialize, Debug)]
 struct ErrorResponse {
@@ -173,14 +171,12 @@ impl RemoteBackend for Server {
                                     .into_iter()
                                     .map(|f| FileEntry {
                                         ino: 0,
-                                        path: "/".to_string()
-                                            + &f.path.to_string_lossy().to_string(),
+                                        path: f.path.to_string_lossy().to_string(),
                                         name: f
                                             .path
                                             .file_name()
-                                            .expect("Unable to get the file name")
-                                            .to_str()
-                                            .unwrap()
+                                            .unwrap_or_else(|| OsStr::new("/"))
+                                            .to_string_lossy()
                                             .to_string(),
                                         is_dir: f.ty == 1,
                                         size: f.size,
@@ -194,9 +190,6 @@ impl RemoteBackend for Server {
                                             Some(g) => g,
                                             None => f.owner,
                                         },
-                                    })
-                                    .inspect(|f| {
-                                        println!("FileEntry: {:?}, path: {}", f, f.path);
                                     })
                                     .collect());
                             }
@@ -236,8 +229,13 @@ impl RemoteBackend for Server {
                         Ok(file) => {
                             let entry = FileEntry {
                                 ino: 0,
-                                name: file.path.file_name().unwrap().to_str().unwrap().to_string(),
-                                path: "/".to_string() + &file.path.to_string_lossy().to_string(),
+                                name: file
+                                    .path
+                                    .file_name()
+                                    .unwrap_or_else(|| OsStr::new("/"))
+                                    .to_string_lossy()
+                                    .to_string(),
+                                path: file.path.to_string_lossy().to_string(),
                                 is_dir: file.ty == 1,
                                 size: file.size,
                                 perms: file.permissions,
@@ -308,24 +306,27 @@ impl RemoteBackend for Server {
                 .unwrap()
                 .join(path.strip_prefix('/').unwrap_or(path))
                 .unwrap();
-
             let resp = self.client.get(request_url).send().await;
-
             match resp {
                 Ok(resp) => match resp.status() {
                     StatusCode::OK => match resp.json::<FileServerResponse>().await {
                         Ok(file) => {
                             let entry = FileEntry {
                                 ino: 0,
-                                name: file.path.file_name().unwrap().to_str().unwrap().to_string(),
-                                path: file.path.to_string_lossy().to_string(),
+                                name: file
+                                    .path
+                                    .file_name()
+                                    .unwrap_or_else(|| OsStr::new("/"))
+                                    .to_string_lossy()
+                                    .to_string(),
+                                path: file.path.to_string_lossy().to_string().to_string(),
                                 is_dir: file.ty == 1,
                                 size: file.size,
                                 atime: file.atime,
                                 mtime: file.mtime,
                                 ctime: file.ctime,
                                 perms: file.permissions,
-                                nlinks: 0,
+                                nlinks: 2,
                                 uid: file.owner,
                                 gid: file.group.unwrap_or(file.owner),
                             };

@@ -80,3 +80,9 @@ Content-Type: application/json
 {
   "new_mod": 292
 }
+
+###
+GET http://localhost:3000/api/mod/
+Content-Type: application/json
+
+{}

@@ -1,6 +1,6 @@
 use clap::Parser;
 use fuser::MountOption;
-use rfs_api::{Server, stub::StubBackend};
+use rfs_api::Server;
 use rfs_fuse::RemoteFS;
 
 #[derive(Parser, Debug)]
