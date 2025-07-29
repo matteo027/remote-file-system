@@ -1,8 +1,19 @@
-use std::{ffi::OsStr, path::{Path,PathBuf}, sync::{Mutex,atomic::{AtomicU64,Ordering}},time::{Duration,SystemTime}};
-use fuser::{Filesystem, Request, ReplyAttr, ReplyEntry, ReplyDirectory, FileAttr, FileType, ReplyEmpty, ReplyCreate, ReplyData, ReplyOpen, ReplyWrite, TimeOrNow};
-use rfs_models::{FsEntry, FileChunk, RemoteBackend, SetAttrRequest};
-use libc::{ENOENT, EIO};
+use fuser::{
+    FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
+    ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
+};
+use libc::{EIO, ENOENT};
+use rfs_models::{FileChunk, FileEntry, RemoteBackend, SetAttrRequest};
 use std::collections::HashMap;
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime},
+};
 
 ///! Implementare meglio il mapping degli errori da backend a fuser, tramite una funzione apposita che sfrutta anche EACCES, EEXIST ecc
 
@@ -16,7 +27,7 @@ pub struct RemoteFS<B: RemoteBackend> {
 }
 
 impl<B: RemoteBackend> RemoteFS<B> {
-    pub fn new(backend: B) -> Self{
+    pub fn new(backend: B) -> Self {
         let fs = RemoteFS {
             backend,
             next_ino: AtomicU64::new(ROOT_INO + 1), // il primo inode disponibile è ROOT_INO + 1
@@ -28,8 +39,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
     fn get_local_ino(&self, path: &PathBuf) -> u64 {
         if let Some(ino) = self.path_to_ino.lock().unwrap().get(path) {
             return *ino;
-        }
-        else{
+        } else {
             let ino = self.next_ino.fetch_add(1, Ordering::Relaxed);
             self.path_to_ino.lock().unwrap().insert(path.clone(), ino);
             return ino;
@@ -37,11 +47,20 @@ impl<B: RemoteBackend> RemoteFS<B> {
     }
 
     fn inode_to_path(&self, ino: u64) -> Option<PathBuf> {
-        self.path_to_ino.lock().unwrap().iter()
-            .find_map(|(path, &entry_ino)| if entry_ino == ino { Some(path.clone()) } else { None })
+        self.path_to_ino
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(path, &entry_ino)| {
+                if entry_ino == ino {
+                    Some(path.clone())
+                } else {
+                    None
+                }
+            })
     }
 
-    fn entry_to_attr(&self, ino: u64, entry: &FsEntry) -> FileAttr {
+    fn entry_to_attr(&self, ino: u64, entry: &FileEntry) -> FileAttr {
         FileAttr {
             ino,
             size: entry.size,
@@ -50,7 +69,11 @@ impl<B: RemoteBackend> RemoteFS<B> {
             mtime: entry.mtime,
             ctime: entry.ctime,
             crtime: entry.ctime, // crtime is usually the same as ctime, to be checked
-            kind: if entry.is_dir { FileType::Directory } else { FileType::RegularFile },
+            kind: if entry.is_dir {
+                FileType::Directory
+            } else {
+                FileType::RegularFile
+            },
             perm: entry.perms,
             nlink: entry.nlinks,
             uid: entry.uid,
@@ -62,9 +85,16 @@ impl<B: RemoteBackend> RemoteFS<B> {
     }
 }
 
-impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
-    fn init(&mut self, _req: &Request<'_>, _config: &mut fuser::KernelConfig)  -> Result<(), libc::c_int> {
-        self.path_to_ino.lock().unwrap().insert(PathBuf::from("/"), ROOT_INO);
+impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
+    fn init(
+        &mut self,
+        _req: &Request<'_>,
+        _config: &mut fuser::KernelConfig,
+    ) -> Result<(), libc::c_int> {
+        self.path_to_ino
+            .lock()
+            .unwrap()
+            .insert(PathBuf::from("/"), ROOT_INO);
         match self.backend.list_dir("/") {
             Ok(entries) => {
                 for entry in entries {
@@ -84,7 +114,9 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
     }
 
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let dir= self.inode_to_path(parent).unwrap_or_else(|| PathBuf::from("/"));
+        let dir = self
+            .inode_to_path(parent)
+            .unwrap_or_else(|| PathBuf::from("/"));
         match self.backend.list_dir(dir.to_str().unwrap()) {
             Ok(entries) => {
                 if let Some(entry) = entries.iter().find(|e| e.name == name.to_string_lossy()) {
@@ -101,7 +133,8 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) { //fh serve poi quando si fa read/write
+    fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
+        //fh serve poi quando si fa read/write
         if let Some(path) = self.inode_to_path(ino) {
             match self.backend.get_attr(path.to_str().unwrap()) {
                 Ok(entry) => {
@@ -115,22 +148,42 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn readdir(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64, mut reply: ReplyDirectory) {
-       let dir= self.inode_to_path(ino).unwrap_or_else(|| PathBuf::from("/"));
+    fn readdir(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        mut reply: ReplyDirectory,
+    ) {
+        let dir = self
+            .inode_to_path(ino)
+            .unwrap_or_else(|| PathBuf::from("/"));
 
         match self.backend.list_dir(dir.to_str().unwrap()) {
             Ok(entries) => {
-                if offset == 0 { let _ = reply.add(ino, 1, FileType::Directory, "."); }
+                if offset == 0 {
+                    let _ = reply.add(ino, 1, FileType::Directory, ".");
+                }
                 if offset == 1 {
                     let parent = Path::new(&dir).parent().unwrap_or(Path::new("/"));
-                    let parent_ino = *self.path_to_ino.lock().unwrap().get(parent).unwrap_or(&ROOT_INO);
+                    let parent_ino = *self
+                        .path_to_ino
+                        .lock()
+                        .unwrap()
+                        .get(parent)
+                        .unwrap_or(&ROOT_INO);
                     let _ = reply.add(parent_ino, 2, FileType::Directory, "..");
                 }
                 let start = (offset - 2).max(0) as usize;
                 for (i, entry) in entries.iter().enumerate().skip(start) {
-                    let full= dir.join(&entry.name);
+                    let full = dir.join(&entry.name);
                     let ino = self.get_local_ino(&full);
-                    let kind = if entry.is_dir { FileType::Directory } else { FileType::RegularFile };
+                    let kind = if entry.is_dir {
+                        FileType::Directory
+                    } else {
+                        FileType::RegularFile
+                    };
                     let _ = reply.add(ino, (i as i64) + 3, kind, &entry.name);
                 }
                 reply.ok();
@@ -139,9 +192,20 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn create(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, _mode: u32, _umask:u32, flags: i32, reply: ReplyCreate) {
-        let dir = self.inode_to_path(parent).unwrap_or_else(|| PathBuf::from("/"));
-        let path= dir.join(name);
+    fn create(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        _mode: u32,
+        _umask: u32,
+        flags: i32,
+        reply: ReplyCreate,
+    ) {
+        let dir = self
+            .inode_to_path(parent)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        let path = dir.join(name);
         match self.backend.create_file(path.to_str().unwrap()) {
             Ok(entry) => {
                 let ino = self.get_local_ino(&path);
@@ -152,8 +216,18 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn mkdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, _mode: u32, _umask:u32, reply: ReplyEntry) {
-        let dir = self.inode_to_path(parent).unwrap_or_else(|| PathBuf::from("/"));
+    fn mkdir(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        _mode: u32,
+        _umask: u32,
+        reply: ReplyEntry,
+    ) {
+        let dir = self
+            .inode_to_path(parent)
+            .unwrap_or_else(|| PathBuf::from("/"));
         let path = dir.join(name);
         match self.backend.create_dir(path.to_str().unwrap()) {
             Ok(entry) => {
@@ -166,7 +240,9 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
     }
 
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        let dir = self.inode_to_path(parent).unwrap_or_else(|| PathBuf::from("/"));
+        let dir = self
+            .inode_to_path(parent)
+            .unwrap_or_else(|| PathBuf::from("/"));
         let path = dir.join(name);
         if self.backend.delete_file(path.to_str().unwrap()).is_ok() {
             self.path_to_ino.lock().unwrap().remove(&path);
@@ -177,7 +253,9 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
     }
 
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        let dir = self.inode_to_path(parent).unwrap_or_else(|| PathBuf::from("/"));
+        let dir = self
+            .inode_to_path(parent)
+            .unwrap_or_else(|| PathBuf::from("/"));
         let path = dir.join(name);
         if self.backend.delete_dir(path.to_str().unwrap()).is_ok() {
             self.path_to_ino.lock().unwrap().remove(&path);
@@ -189,22 +267,37 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
 
     fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         // DA CONTROLLARE
-       if let Some(path) = self.inode_to_path(ino) {
+        if let Some(path) = self.inode_to_path(ino) {
             // Se il flag contiene O_TRUNC, tronca il file
             if flags & libc::O_TRUNC != 0 {
                 if let Ok(_) = self.backend.get_attr(path.to_str().unwrap()) {
-                    let _ = self.backend.write_chunk(path.to_str().unwrap(), 0, Vec::new());
+                    let _ = self
+                        .backend
+                        .write_chunk(path.to_str().unwrap(), 0, Vec::new());
                 }
             }
             reply.opened(0, flags as u32);
         } else {
-            reply.error(libc::ENOENT);
+            reply.error(ENOENT);
         }
     }
 
-    fn read(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, offset: i64, size: u32, _flags: i32, _lock_owner: Option<u64>, reply: ReplyData) {
+    fn read(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        size: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: ReplyData,
+    ) {
         if let Some(path) = self.inode_to_path(ino) {
-            match self.backend.read_chunk(path.to_str().unwrap(), offset as u64, size as u64) {
+            match self
+                .backend
+                .read_chunk(path.to_str().unwrap(), offset as u64, size as u64)
+            {
                 Ok(FileChunk { data, .. }) => reply.data(&data),
                 Err(_) => reply.error(EIO),
             }
@@ -213,9 +306,23 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn write(&mut self, _req: &Request<'_>, ino: u64, _fh:u64, offset: i64, data: &[u8], _write_flags: u32, _flags:i32, _lock_owner: Option<u64>, reply: ReplyWrite) {
+    fn write(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        data: &[u8],
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: ReplyWrite,
+    ) {
         if let Some(path) = self.inode_to_path(ino) {
-           if let Ok(bytes_written) = self.backend.write_chunk(path.to_str().unwrap(), offset as u64, data.to_vec()) {
+            if let Ok(bytes_written) =
+                self.backend
+                    .write_chunk(path.to_str().unwrap(), offset as u64, data.to_vec())
+            {
                 reply.written(bytes_written as u32);
             } else {
                 reply.error(EIO);
@@ -225,15 +332,31 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn rename(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, new_parent: u64, new_name: &OsStr, _flags:u32, reply: ReplyEmpty) {
-         let old_dir = self.inode_to_path(parent).unwrap_or_else(|| PathBuf::from("/"));
+    fn rename(
+        &mut self,
+        _req: &Request<'_>,
+        parent: u64,
+        name: &OsStr,
+        new_parent: u64,
+        new_name: &OsStr,
+        _flags: u32,
+        reply: ReplyEmpty,
+    ) {
+        let old_dir = self
+            .inode_to_path(parent)
+            .unwrap_or_else(|| PathBuf::from("/"));
         let old_path = old_dir.join(name);
 
         // Recupero il nuovo path
-        let new_dir = self.inode_to_path(new_parent).unwrap_or_else(|| PathBuf::from("/"));
+        let new_dir = self
+            .inode_to_path(new_parent)
+            .unwrap_or_else(|| PathBuf::from("/"));
         let new_path = new_dir.join(new_name);
 
-        match self.backend.rename(old_path.to_str().unwrap(), new_path.to_str().unwrap()) {
+        match self
+            .backend
+            .rename(old_path.to_str().unwrap(), new_path.to_str().unwrap())
+        {
             Ok(_) => {
                 let mut map = self.path_to_ino.lock().unwrap();
                 if let Some(ino) = map.remove(&old_path) {
@@ -245,8 +368,25 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn setattr(&mut self, _req: &Request<'_>, ino: u64, mode: Option<u32>, uid: Option<u32>, gid: Option<u32>, size:Option<u64>, atime: Option<TimeOrNow>, mtime: Option<TimeOrNow>, _ctime: Option<SystemTime>, _fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, _flags: Option<u32>, reply: ReplyAttr) {
-        let path = match self.inode_to_path(ino){
+    fn setattr(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        _ctime: Option<SystemTime>,
+        _fh: Option<u64>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
+        _flags: Option<u32>,
+        reply: ReplyAttr,
+    ) {
+        let path = match self.inode_to_path(ino) {
             Some(p) => p,
             None => {
                 return reply.error(ENOENT);
@@ -276,7 +416,14 @@ impl <B:RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn flush(&mut self, _req: &Request<'_>, _ino: u64, _fh: u64, _lock_owner: u64, reply: ReplyEmpty) {
+    fn flush(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _lock_owner: u64,
+        reply: ReplyEmpty,
+    ) {
         // Non facciamo nulla di particolare al flush
         reply.ok();
     }
