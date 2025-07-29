@@ -84,9 +84,7 @@ export class FileSystemController {
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
 
         try {
-            console.log(req.params.path);
             await fs.mkdir(path_manipulator.resolve(FS_PATH, path));
-            console.log(path + " *2");
             const directory = {
                 path: path,
                 owner: user,
