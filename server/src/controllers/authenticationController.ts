@@ -28,6 +28,10 @@ export class AuthenticationController {
 
             const hashedPassword = await scryptAsync(password, user?.salt || "", 32) as Buffer;
 
+            if (Buffer.from(user?.password || "", 'hex').length !== hashedPassword.length) {
+                return res(false);
+            }
+
             if (crypto.timingSafeEqual(Buffer.from(user?.password || "", 'hex'), hashedPassword))
                 res({ uid: user?.uid });
             else res(false);
