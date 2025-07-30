@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import * as fs from 'node:fs/promises';
-import type { Mode } from 'node:fs';
 import path_manipulator from 'node:path';
 import { AppDataSource } from '../data-source';
 import { File } from '../entities/File';
@@ -15,10 +14,8 @@ const groupRepo = AppDataSource.getRepository(Group);
 function normalizePath(input?: string | string[]): string {
     const raw = Array.isArray(input) ? input.join('/'): (input ?? '');
     const replaced = raw.replace(/\\/g, '/');
-    // 2) se è vuoto, considera subito la root "/"
-    const toNormalize = replaced === '' ? '/' : replaced;
     // 3) normalizza POSIX (rimuove ".", "..", doppi slash, ecc.)
-    return path_manipulator.posix.normalize(toNormalize);
+    return path_manipulator.posix.normalize('/' + replaced);
 }
 
 function toFsPath(dbPath: string): string {
@@ -145,7 +142,6 @@ export class FileSystemController {
 
         const dbPath    = normalizePath(req.params.path);
         const fullFsPath = toFsPath(dbPath);
-        
         const now = Date.now();
         const user: User = req.user as User;
         if (user === null) {
@@ -160,8 +156,8 @@ export class FileSystemController {
             const file: File = {
                 path: dbPath,
                 owner: user,
-                type: 1,
-                permissions: 0o755,
+                type: 0,
+                permissions: 0o644,
                 group: user_group,
                 size: 0,
                 atime: now,
@@ -329,42 +325,71 @@ export class FileSystemController {
 
     public setattr = async (req: Request, res: Response) => {
         const dbPath = normalizePath(req.params.path);
+        if (!dbPath) {
+            return res.status(400).json({ error: 'Path parameter is missing' });
+        }
+
         const fullFsPath = toFsPath(dbPath);
-        const new_mod: Mode = parseInt(req.body.new_mod);
-        if (dbPath == undefined)
-            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
 
-        if (isNaN(new_mod)) {
-            return res.status(400).json({ error: "Parameter 'mod' is not a valid number" });
+        const {
+            mode: rawMode,
+            uid: rawUid,
+            gid: rawGid,
+            size: rawSize,
+            // flags: rawFlags
+        } = req.body;
+        
+        console.log(`Received attributes: mode=${rawMode}, uid=${rawUid}, gid=${rawGid}, size=${rawSize}`);
+        let newMode: number | undefined;
+        if (rawMode !== undefined && rawMode !== null) {
+            newMode = parseInt(rawMode, 10);
+            if (isNaN(newMode) || newMode < 0 || newMode > 0o777) {
+                return res.status(400).json({ error: 'Invalid mode (0–0o777)' });
+            }
         }
 
-        if (new_mod < 0 || new_mod > 0o777) {
-            return res.status(400).json({ error: "Parameter 'mod' out of range (0-511)" });
+        let newSize: number | undefined;
+        if (rawSize !== undefined && rawSize !== null) {
+            newSize = parseInt(rawSize, 10);
+            if (isNaN(newSize) || newSize < 0) {
+                return res.status(400).json({ error: 'Invalid size' });
+            }
         }
 
-        try {
-
-            let file: File = await fileRepo.findOne({
+        try{
+            const file = await fileRepo.findOneOrFail({
                 where: { path: dbPath },
                 relations: ['owner', 'group']
-            }) as File;
-            if (!this.has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to change mod of the file ' + dbPath });
+            });
 
-
-            file.permissions = new_mod;
-            await fileRepo.save(file);
-
-            await fs.chmod(fullFsPath, new_mod);
-            res.status(200).json({ ...file, owner: file.owner.uid, group: file.group?.gid });
-        } catch (err: any) {
-            if (err.code === 'ENOENT') {
-                res.status(404).json({ error: 'File not found' });
-            } else if (err.code === 'EACCES') {
-                res.status(403).json({ error: 'Access denied' });
-            } else {
-                res.status(500).json({ error: 'Not possible to change mod of ' + dbPath, details: err });
+            if (!this.has_permissions(file, /* bit= */1, req.user as User)) {
+                return res.status(403).json({ error: `No permission on ${dbPath}` });
             }
+
+            if (newMode !== undefined && newMode !== null) {
+                // await fs.chmod(fullFsPath, newMode); // non c'è bisogno di cambiare i metadati effettivi del file
+                file.permissions = newMode;
+            }
+
+            if (newSize !== undefined && newSize !== null) {
+                await fs.truncate(fullFsPath, newSize);
+                file.size = newSize;
+            }
+
+            await fileRepo.save(file);
+            return res.status(200).json({...file, owner: file.owner.uid, group: file.group?.gid});
+        } catch (err: any) {
+            if (err.name === 'EntityNotFound') {
+                return res.status(404).json({ error: 'File not found' });
+            }
+            if (err.code === 'ENOENT') {
+                return res.status(404).json({ error: 'Filesystem path not found' });
+            }
+            if (err.code === 'EACCES') {
+                return res.status(403).json({ error: 'Access denied on FS' });
+            }
+            console.error(err);
+            return res.status(500).json({ error: 'Unable to update attributes', details: err.message });
         }
     }
 
@@ -375,8 +400,6 @@ export class FileSystemController {
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
 
         try {
-            console.log(`Getting attributes for: ${dbPath}`);
-
             let file: File = await fileRepo.findOne({
                 where: { path: dbPath },
                 relations: ['owner', 'group']

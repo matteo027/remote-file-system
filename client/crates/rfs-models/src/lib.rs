@@ -1,5 +1,6 @@
 use std::time::SystemTime;
 use thiserror::Error;
+use serde::{Deserialize, Serialize};
 
 // Modello di dominio per una voce di file system remoto, da utilizzare internamente e per caching
 #[derive(Debug, Clone)]
@@ -38,13 +39,13 @@ pub enum FileType {
     Symlink,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetAttrRequest {
-    pub mode: Option<u32>,
+    pub new_mode: Option<u32>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
     pub size: Option<u64>,
-    pub atime: Option<SystemTime>,
-    pub mtime: Option<SystemTime>,
+    pub flags: Option<u32>,
 }
 
 pub struct FileChunk {
@@ -54,8 +55,6 @@ pub struct FileChunk {
 
 #[derive(Debug, Error)]
 pub enum BackendError {
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
     #[error("Not found: {0}")]
     NotFound(String),
     #[error("Unauthorized")]

@@ -1,24 +1,29 @@
-use fuser::{
-    FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow,
-};
-use libc::{EIO, ENOENT};
-use rfs_models::{FileChunk, FileEntry, RemoteBackend, SetAttrRequest};
+use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
+use rfs_models::{FileChunk, FileEntry, RemoteBackend, SetAttrRequest, BackendError};
 use std::collections::HashMap;
+use libc::ENOENT;
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Mutex, atomic::{AtomicU64, Ordering}},
     time::{Duration, SystemTime},
 };
 
-///! Implementare meglio il mapping degli errori da backend a fuser, tramite una funzione apposita che sfrutta anche EACCES, EEXIST ecc
-
 const TTL: Duration = Duration::from_secs(1);
 const ROOT_INO: u64 = 1;
+
+fn map_error(error: &BackendError) -> libc::c_int {
+    use libc::{EIO, EACCES, EEXIST, EHOSTUNREACH};
+    match error {
+        BackendError::NotFound(_) => ENOENT,
+        BackendError::Unauthorized => EACCES,
+        BackendError::Conflict(_) => EEXIST,
+        BackendError::InternalServerError => EIO,
+        BackendError::BadAnswerFormat => EIO,
+        BackendError::ServerUnreachable => EHOSTUNREACH,
+        BackendError::Other(_) => EIO, // consider other errors as I/O errors
+    }
+}
 
 pub struct RemoteFS<B: RemoteBackend> {
     backend: B,
@@ -28,12 +33,11 @@ pub struct RemoteFS<B: RemoteBackend> {
 
 impl<B: RemoteBackend> RemoteFS<B> {
     pub fn new(backend: B) -> Self {
-        let fs = RemoteFS {
+        Self {
             backend,
             next_ino: AtomicU64::new(ROOT_INO + 1), // il primo inode disponibile è ROOT_INO + 1
             path_to_ino: Mutex::new(HashMap::new()),
-        };
-        fs
+        }
     }
 
     fn get_local_ino(&self, path: &PathBuf) -> u64 {
@@ -96,7 +100,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 }
                 Ok(())
             }
-            Err(_) => Err(EIO),
+            Err(e) => Err(map_error(&e)),
         }
     }
 
@@ -121,7 +125,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                     reply.error(ENOENT);
                 }
             }
-            Err(_) => reply.error(EIO),
+            Err(e) => reply.error(map_error(&e)),
         }
     }
 
@@ -133,7 +137,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                     let attr = self.entry_to_attr(ino, &entry);
                     reply.attr(&TTL, &attr);
                 }
-                Err(_) => reply.error(EIO),
+                Err(e) => reply.error(map_error(&e)),
             }
         } else {
             reply.error(ENOENT);
@@ -173,7 +177,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 }
                 reply.ok();
             }
-            Err(_) => reply.error(EIO),
+            Err(e) => reply.error(map_error(&e)),
         }
     }
 
@@ -188,7 +192,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 let attr = self.entry_to_attr(ino, &entry);
                 reply.created(&TTL, &attr, 0, 0, flags as u32);
             }
-            Err(_) => reply.error(EIO),
+            Err(e) => reply.error(map_error(&e)),
         }
     }
 
@@ -203,7 +207,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 let attr = self.entry_to_attr(ino, &entry);
                 reply.entry(&TTL, &attr, 0);
             }
-            Err(_) => reply.error(EIO),
+            Err(e) => reply.error(map_error(&e)),
         }
     }
 
@@ -212,11 +216,12 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             .inode_to_path(parent)
             .unwrap_or_else(|| PathBuf::from("/"));
         let path = dir.join(name);
-        if self.backend.delete_file(path.to_str().unwrap()).is_ok() {
-            self.path_to_ino.lock().unwrap().remove(&path);
-            reply.ok();
-        } else {
-            reply.error(EIO);
+        match self.backend.delete_file(path.to_str().unwrap()) {
+            Ok(_) => {
+                self.path_to_ino.lock().unwrap().remove(&path);
+                reply.ok();
+            }
+            Err(e) => reply.error(map_error(&e)),
         }
     }
 
@@ -225,11 +230,12 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             .inode_to_path(parent)
             .unwrap_or_else(|| PathBuf::from("/"));
         let path = dir.join(name);
-        if self.backend.delete_dir(path.to_str().unwrap()).is_ok() {
-            self.path_to_ino.lock().unwrap().remove(&path);
-            reply.ok();
-        } else {
-            reply.error(EIO);
+        match self.backend.delete_dir(path.to_str().unwrap()) {
+            Ok(_) => {
+                self.path_to_ino.lock().unwrap().remove(&path);
+                reply.ok();
+            }
+            Err(e) => reply.error(map_error(&e)),
         }
     }
 
@@ -252,12 +258,9 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
 
     fn read(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,size: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyData,) {
         if let Some(path) = self.inode_to_path(ino) {
-            match self
-                .backend
-                .read_chunk(path.to_str().unwrap(), offset as u64, size as u64)
-            {
+            match self.backend.read_chunk(path.to_str().unwrap(), offset as u64, size as u64) {
                 Ok(FileChunk { data, .. }) => reply.data(&data),
-                Err(_) => reply.error(EIO),
+                Err(e) => reply.error(map_error(&e)),
             }
         } else {
             reply.error(ENOENT);
@@ -266,13 +269,9 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
 
     fn write(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,data: &[u8],_write_flags: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyWrite,) {
         if let Some(path) = self.inode_to_path(ino) {
-            if let Ok(bytes_written) =
-                self.backend
-                    .write_chunk(path.to_str().unwrap(), offset as u64, data.to_vec())
-            {
-                reply.written(bytes_written as u32);
-            } else {
-                reply.error(EIO);
+            match self.backend.write_chunk(path.to_str().unwrap(), offset as u64, data.to_vec()) {
+                Ok(bytes_written) => reply.written(bytes_written as u32),
+                Err(e) => reply.error(map_error(&e)),
             }
         } else {
             reply.error(ENOENT);
@@ -291,10 +290,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             .unwrap_or_else(|| PathBuf::from("/"));
         let new_path = new_dir.join(new_name);
 
-        match self
-            .backend
-            .rename(old_path.to_str().unwrap(), new_path.to_str().unwrap())
-        {
+        match self.backend.rename(old_path.to_str().unwrap(), new_path.to_str().unwrap()){
             Ok(_) => {
                 let mut map = self.path_to_ino.lock().unwrap();
                 if let Some(ino) = map.remove(&old_path) {
@@ -302,7 +298,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 }
                 reply.ok();
             }
-            Err(_) => reply.error(EIO),
+            Err(e) => reply.error(map_error(&e)),
         }
     }
 
@@ -314,14 +310,14 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         uid: Option<u32>,
         gid: Option<u32>,
         size: Option<u64>,
-        atime: Option<TimeOrNow>,
-        mtime: Option<TimeOrNow>,
+        _atime: Option<TimeOrNow>,
+        _mtime: Option<TimeOrNow>,
         _ctime: Option<SystemTime>,
         _fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
-        _flags: Option<u32>,
+        flags: Option<u32>,
         reply: ReplyAttr,
     ) {
         let path = match self.inode_to_path(ino) {
@@ -330,19 +326,13 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 return reply.error(ENOENT);
             }
         };
+
         let new_set_attr = SetAttrRequest {
-            mode,
+            new_mode: mode,
             uid,
             gid,
             size,
-            atime: atime.map(|t| match t {
-                TimeOrNow::Now => SystemTime::now(),
-                TimeOrNow::SpecificTime(t) => t,
-            }),
-            mtime: mtime.map(|t| match t {
-                TimeOrNow::Now => SystemTime::now(),
-                TimeOrNow::SpecificTime(t) => t,
-            }),
+            flags, // flags non sono supportati in questo momento, ancora da implementare
         };
 
         match self.backend.set_attr(path.to_str().unwrap(), new_set_attr) {
@@ -350,12 +340,12 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 let attr = self.entry_to_attr(ino, &entry);
                 reply.attr(&TTL, &attr);
             }
-            Err(_) => reply.error(EIO),
+            Err(e) => reply.error(map_error(&e)),
         }
     }
 
     fn flush(&mut self,_req: &Request<'_>,_ino: u64,_fh: u64,_lock_owner: u64,reply: ReplyEmpty) {
-        // Non facciamo nulla di particolare al flush
+        // Non facciamo nulla di particolare al flush per ora, CONTROLLARE SE SERVE PIÙ AVANTI
         reply.ok();
     }
 }
