@@ -1,6 +1,6 @@
 use reqwest::cookie::Jar;
 use reqwest::{Client, Method, StatusCode, Url};
-use rfs_models::{BackendError, FileChunk, FileEntry, RemoteBackend, SetAttrRequest};
+use rfs_models::{BackendError, FileEntry, RemoteBackend, SetAttrRequest};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::ffi::OsStr;
@@ -255,14 +255,11 @@ impl RemoteBackend for Server {
         Ok(())
     }
 
-    fn read_chunk(&mut self,path: &str,offset: u64,size: u64) -> Result<FileChunk, BackendError> {
+    fn read_chunk(&mut self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
         self.check_and_authenticate()?;
-        let endpoint = format!("api/files/chunk/{}/{}", path.trim_start_matches('/'), offset);
-        let resp: FileChunk = self.request(Method::GET, &endpoint)?;
-        if resp.data.len() as u64 != size {
-            return Err(BackendError::BadAnswerFormat);
-        }
-        Ok(resp)
+        let endpoint = format!("api/files/{}?offset={}&size={}", path.trim_start_matches('/'), offset, size);
+        let resp: serde_json::Value = self.request(Method::GET, &endpoint)?;
+        Ok(resp["data"].as_str().map(|s| s.as_bytes().to_vec()).unwrap_or_default())
     }
 
     fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
@@ -270,7 +267,7 @@ impl RemoteBackend for Server {
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         let body = serde_json::json!({ "offset": offset, "data": data });
         let resp: serde_json::Value = self.request_with_body(Method::PUT, &endpoint, &body)?;
-        Ok(resp["size"].as_u64().unwrap_or(0))
+        Ok(resp["bytes"].as_u64().unwrap_or(0))
     }
 
     fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
