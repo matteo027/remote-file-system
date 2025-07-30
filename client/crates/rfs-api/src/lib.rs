@@ -127,7 +127,7 @@ impl Server {
                             .read_line(&mut password)
                             .expect("Failed to read the password");
                         password = password.trim().to_string(); // removing the final endl
-                        println!("Read correctly");
+                        io::stdout().flush().unwrap();
                         let login_url = address.join("api/login").unwrap();
                         let body = LoginPayload {
                             username: username,
@@ -143,8 +143,8 @@ impl Server {
                         println!("[auth] login status: {:?}", resp_login.status());
                         for cookie in resp_login.cookies() {
                             println!("[auth] cookie: {}={}", cookie.name(), cookie.value());
-                            fs::create_dir_all("/tmp")?; // ensure directory exists
-                            fs::write("/tmp/rfs-token", cookie.value())?;
+                            fs::create_dir_all("/tmp").expect("Unbale to create /tmp");
+                            fs::write("/tmp/rfs-token", cookie.value()).expect("Unbale to create /tmp/rfs-token");
                         }
 
                         if resp_login.status() == StatusCode::OK {
@@ -239,6 +239,7 @@ impl RemoteBackend for Server {
         println!("ALL RIGHT");
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let files: Vec<FileServerResponse> = self.request(Method::GET, &endpoint)?;
+        println!("{:?}", files);
         Ok(files.into_iter().map(Self::response_to_entry).collect())
     }
 

@@ -34,7 +34,6 @@ app.use(passport.authenticate('session'));
 passport.use(new LocalStrategy(
   async function verify(username: string, password: string, cb) {
     try {
-      console.log("Rec:", username, password);
       if([...username].some(c => c < '0' || c > '9')) return cb(null, false, { message: "Incorrect username or password." });
       const uid = parseInt(username);
       const user = await new AuthenticationController().getUser(uid, password);
