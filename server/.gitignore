@@ -1,4 +1,3 @@
 node_modules/
 metadata.sqlite
-file-system/admin
-.idea/
+file-system/
