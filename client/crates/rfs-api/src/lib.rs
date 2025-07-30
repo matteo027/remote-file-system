@@ -2,9 +2,8 @@ use reqwest::cookie::Jar;
 use reqwest::header::{HeaderValue, COOKIE};
 use reqwest::{Client, Method, StatusCode, Url};
 use rfs_models::{BackendError, FileChunk, FileEntry, RemoteBackend, SetAttrRequest};
-use serde::de::{DeserializeOwned, IntoDeserializer};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::to_string;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
@@ -236,10 +235,8 @@ impl Server {
 impl RemoteBackend for Server {
     fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
         self.check_and_authenticate()?;
-        println!("ALL RIGHT");
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let files: Vec<FileServerResponse> = self.request(Method::GET, &endpoint)?;
-        println!("{:?}", files);
         Ok(files.into_iter().map(Self::response_to_entry).collect())
     }
 
