@@ -86,11 +86,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
 }
 
 impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
-    fn init(
-        &mut self,
-        _req: &Request<'_>,
-        _config: &mut fuser::KernelConfig,
-    ) -> Result<(), libc::c_int> {
+    fn init(&mut self,_req: &Request<'_>,_config: &mut fuser::KernelConfig) -> Result<(), libc::c_int> {
         self.path_to_ino
             .lock()
             .unwrap()
@@ -148,14 +144,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn readdir(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        mut reply: ReplyDirectory,
-    ) {
+    fn readdir(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,mut reply: ReplyDirectory) {
         let dir = self
             .inode_to_path(ino)
             .unwrap_or_else(|| PathBuf::from("/"));
@@ -192,16 +181,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn create(
-        &mut self,
-        _req: &Request<'_>,
-        parent: u64,
-        name: &OsStr,
-        _mode: u32,
-        _umask: u32,
-        flags: i32,
-        reply: ReplyCreate,
-    ) {
+    fn create(&mut self,_req: &Request<'_>, parent: u64,name: &OsStr,_mode: u32,_umask: u32,flags: i32,reply: ReplyCreate,) {
         let dir = self
             .inode_to_path(parent)
             .unwrap_or_else(|| PathBuf::from("/"));
@@ -216,15 +196,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn mkdir(
-        &mut self,
-        _req: &Request<'_>,
-        parent: u64,
-        name: &OsStr,
-        _mode: u32,
-        _umask: u32,
-        reply: ReplyEntry,
-    ) {
+    fn mkdir(&mut self,_req: &Request<'_>,parent: u64,name: &OsStr,_mode: u32,_umask: u32,reply: ReplyEntry) {
         let dir = self
             .inode_to_path(parent)
             .unwrap_or_else(|| PathBuf::from("/"));
@@ -282,17 +254,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn read(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
-        reply: ReplyData,
-    ) {
+    fn read(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,size: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyData,) {
         if let Some(path) = self.inode_to_path(ino) {
             match self
                 .backend
@@ -306,18 +268,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn write(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        data: &[u8],
-        _write_flags: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
-        reply: ReplyWrite,
-    ) {
+    fn write(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,data: &[u8],_write_flags: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyWrite,) {
         if let Some(path) = self.inode_to_path(ino) {
             if let Ok(bytes_written) =
                 self.backend
@@ -332,16 +283,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn rename(
-        &mut self,
-        _req: &Request<'_>,
-        parent: u64,
-        name: &OsStr,
-        new_parent: u64,
-        new_name: &OsStr,
-        _flags: u32,
-        reply: ReplyEmpty,
-    ) {
+    fn rename(&mut self,_req: &Request<'_>,parent: u64,name: &OsStr,new_parent: u64,new_name: &OsStr,_flags: u32,reply: ReplyEmpty,) {
         let old_dir = self
             .inode_to_path(parent)
             .unwrap_or_else(|| PathBuf::from("/"));
@@ -416,14 +358,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn flush(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _lock_owner: u64,
-        reply: ReplyEmpty,
-    ) {
+    fn flush(&mut self,_req: &Request<'_>,_ino: u64,_fh: u64,_lock_owner: u64,reply: ReplyEmpty) {
         // Non facciamo nulla di particolare al flush
         reply.ok();
     }
