@@ -1,9 +1,13 @@
 use reqwest::cookie::Jar;
+use reqwest::header::{HeaderValue, COOKIE};
 use reqwest::{Client, Method, StatusCode, Url};
 use rfs_models::{BackendError, FileChunk, FileEntry, RemoteBackend, SetAttrRequest};
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::to_string;
 use std::ffi::OsStr;
+use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -82,12 +86,23 @@ impl Server {
                 .expect("Unable to geenrate e tokio Runtime");
 
             rt.block_on(async move {
+
+
+                // trying to read from /temp/rfs-token
+                let mut cookie= String::new();
+
+                if let Ok(token) = fs::read_to_string("/tmp/rfs-token") {
+                    cookie = format!("connect.sid={}", token.trim());
+                }
+
                 // Step 1: check /api/me
                 let me_url = address.join("api/me").unwrap();
                 let resp = client
                     .get(me_url.clone())
+                    .header(COOKIE, HeaderValue::from_str(&cookie).unwrap())
                     .send()
                     .await
+
                     .map_err(|e| BackendError::Other(e.to_string()))?;
 
                 if resp.status() == StatusCode::OK {
@@ -96,37 +111,57 @@ impl Server {
 
                 if resp.status() == StatusCode::UNAUTHORIZED {
                     // Step 2: login
-                    let login_url = address.join("api/login").unwrap();
-                    let body = LoginPayload {
-                        username: "5000".into(),
-                        password: "admin".into(),
-                    };
-                    let resp_login = client
-                        .post(login_url.clone())
-                        .json(&body)
-                        .send()
-                        .await
-                        .map_err(|e| BackendError::Other(e.to_string()))?;
+                    loop {
 
-                    println!("[auth] login status: {:?}", resp_login.status());
-                    for cookie in resp_login.cookies() {
-                        println!("[auth] cookie: {}={}", cookie.name(), cookie.value());
-                    }
-
-                    if resp_login.status() == StatusCode::OK {
-                        // Step 3: optionally verify with /api/me again
-                        let verify = client
-                            .get(me_url)
+                        let mut username = String::new();
+                        let mut password = String::new();
+                        print!("username: ");
+                        io::stdout().flush().unwrap();
+                        io::stdin()
+                            .read_line(&mut username)
+                            .expect("Failed to read the username");
+                        username = username.trim().to_string(); // removing the final endl
+                        print!("password: ");
+                        io::stdout().flush().unwrap();
+                        io::stdin()
+                            .read_line(&mut password)
+                            .expect("Failed to read the password");
+                        password = password.trim().to_string(); // removing the final endl
+                        println!("Read correctly");
+                        let login_url = address.join("api/login").unwrap();
+                        let body = LoginPayload {
+                            username: username,
+                            password: password,
+                        };
+                        let resp_login = client
+                            .post(login_url.clone())
+                            .json(&body)
                             .send()
                             .await
                             .map_err(|e| BackendError::Other(e.to_string()))?;
-                        if verify.status() == StatusCode::OK {
-                            return Ok(());
-                        } else {
-                            return Err(BackendError::Unauthorized);
+
+                        println!("[auth] login status: {:?}", resp_login.status());
+                        for cookie in resp_login.cookies() {
+                            println!("[auth] cookie: {}={}", cookie.name(), cookie.value());
+                            fs::create_dir_all("/tmp")?; // ensure directory exists
+                            fs::write("/tmp/rfs-token", cookie.value())?;
                         }
-                    } else {
-                        return Err(BackendError::Unauthorized);
+
+                        if resp_login.status() == StatusCode::OK {
+                            // Step 3: optionally verify with /api/me again
+                            let verify = client
+                                .get(me_url.clone())
+                                .send()
+                                .await
+                                .map_err(|e| BackendError::Other(e.to_string()))?;
+                            println!("verify status: {}", verify.status());
+                            for cookie in resp_login.cookies() {
+                                println!("[veri] cookie: {}={}", cookie.name(), cookie.value());
+                            }
+                            if verify.status() == StatusCode::OK {
+                                return Ok(());
+                            }
+                        } 
                     }
                 }
 
@@ -153,7 +188,7 @@ impl Server {
             ino: 0, // Inode number is not used in this context, set to 0, check if needed in cache layer
             path: file.path.to_string_lossy().to_string(),
             name,
-            is_dir: file.ty == 1, //TO DO: implement type conversion
+            is_dir: (file.ty == 1) as bool,
             size: file.size,
             perms: file.permissions,
             nlinks: if file.ty == 1 { 2 } else { 1 },
@@ -201,6 +236,7 @@ impl Server {
 impl RemoteBackend for Server {
     fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
         self.check_and_authenticate()?;
+        println!("ALL RIGHT");
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let files: Vec<FileServerResponse> = self.request(Method::GET, &endpoint)?;
         Ok(files.into_iter().map(Self::response_to_entry).collect())
