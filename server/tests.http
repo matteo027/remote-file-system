@@ -51,15 +51,15 @@ DELETE  http://localhost:3000/api/directories/5000/prova
 POST http://localhost:3000/api/files/5000/prova.txt
 
 ###
-PUT http://localhost:3000/api/files/5000/prova.txt
+PUT http://localhost:3000/api/files/file.txt
 Content-Type: application/json
 
 {
-  "text": "ciao mondo"
+  "data": "ciao mondo"
 }
 
 ###
-GET http://localhost:3000/api/files/5000/prova.txt
+GET http://localhost:3000/api/files/file2.txt
 
 ###
 DELETE   http://localhost:3000/api/files/5000/prova.txt

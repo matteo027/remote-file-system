@@ -41,16 +41,11 @@ pub enum FileType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetAttrRequest {
-    pub new_mode: Option<u32>,
+    pub perm: Option<u32>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
     pub size: Option<u64>,
     pub flags: Option<u32>,
-}
-
-pub struct FileChunk {
-    pub data: Vec<u8>,
-    pub offset: u64,
 }
 
 #[derive(Debug, Error)]
@@ -85,12 +80,20 @@ pub trait RemoteBackend: Send + Sync {
     /// Elimina una directory
     fn delete_dir(&mut self, path: &str) -> Result<(), BackendError>;
     /// Legge un chunk di file (offset, lunghezza)
-    fn read_chunk(&mut self, path: &str, offset: u64, size: u64)
-    -> Result<FileChunk, BackendError>;
+    fn read_chunk(&mut self, path: &str, offset: u64, size: u64)-> Result<Vec<u8>, BackendError>;
     /// Scrive un chunk di file (offset incluso) e restituisce il numero di byte scritti
     fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError>;
     /// Rinomina un file o directory
     fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError>;
     /// Imposta gli attributi di un file o directory
     fn set_attr(&mut self, path: &str, attrs: SetAttrRequest) -> Result<FileEntry, BackendError>;
+
+    // ! IMPLEMENTAZIONE RAFFAZZONATA, SI PUO' CAMBIARE 
+    // async fn write_stream<S>(&self,path: &str,offset: u64,data_stream: S,) -> Result<u64, BackendError>
+    //     where S: Stream<Item = Bytes> + Send + 'static {
+    //     unimplemented!()
+    // }
+    // async fn read_stream(&self,path: &str,offset: u64,) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes, BackendError>> + Send>>, BackendError>{
+    //     unimplemented!()
+    // }
 }

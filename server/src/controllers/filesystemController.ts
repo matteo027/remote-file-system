@@ -182,13 +182,15 @@ export class FileSystemController {
         const dbPath    = normalizePath(req.params.path);
         const fullFsPath = toFsPath(dbPath);
 
-        const text: string = req.body.text;
+        const text: Buffer = Buffer.from(req.body.data);
+        const offset: number = req.body.offset ?? 0; // offset passed by the client, default 0      
         const user: User = req.user as User;
         if (user === null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
 
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
+        const now= Date.now();
 
         try {
 
@@ -199,10 +201,20 @@ export class FileSystemController {
             if (!this.has_permissions(file, 1, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to write on the file ' + dbPath });
 
-            await fs.writeFile(fullFsPath, text, { flag: "w" });
+            
+            file.size = Math.max(file.size, offset + text.length); // se sovrascrivo parte del file non aggiorno, se vado oltre all'attuale lunghezza aggiorno
+            file.mtime = now;
+            file.ctime = now;
 
-            res.status(200).json({ bytes: req.body.text.length });
+            await fileRepo.save(file); // update metadata before writing to the file system
+
+            const fh = await fs.open(fullFsPath, "r+");
+            await fh.write(text, 0, text.length, offset);
+            await fh.close();
+
+            res.status(200).json({ bytes: text.length });
         } catch (err: any) {
+            console.error('Error writing file:', err);
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
             } else if (err.code === 'EACCES') {
@@ -215,8 +227,12 @@ export class FileSystemController {
 
     // returns an object containing the field "data", associated to the file content
     public open = async (req: Request, res: Response) => {
-        const dbPath    = normalizePath(req.params.path);
+        const dbPath = normalizePath(req.params.path);
         const fullFsPath = toFsPath(dbPath);
+
+        const offset = Number(req.query.offset) || 0;
+        const size = Number(req.query.size) || 4096;
+        const now = Date.now();
 
         try {
             const file: File = await fileRepo.findOne({
@@ -224,12 +240,17 @@ export class FileSystemController {
                 relations: ['owner', 'group']
             }) as File;
             if (file === null)
-                return res.status(404).json({ error: 'File not found' }); res.status(404).json({ error: 'File not found' });
+                return res.status(404).json({ error: 'File not found' });
             if (!this.has_permissions(file, 0, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to read the content the file ' + dbPath });
+            file.atime = now;
+            await fileRepo.save(file); // update access time before reading
 
-            const content = await fs.readFile(fullFsPath, { flag: "r" });
-            res.json({ bytes: content.toString(), offset: 0 });
+            const fh = await fs.open(fullFsPath, "r");
+            const buffer = Buffer.alloc(Number(size));
+            await fh.read(buffer, 0, Number(size), Number(offset));
+            await fh.close();
+            res.json({ data: buffer.toString("utf-8")}); //offset non serve al ritorno
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -277,11 +298,11 @@ export class FileSystemController {
 
     public rename = async (req: Request, res: Response) => {
 
-        if (req.body.new_name === undefined)
+        if (req.body.new_path === undefined)
             return res.status(400).json({ error: 'Bad format: new file name parameter is missing' });
 
         const dbOldPath=normalizePath(req.params.path);
-        const dbNewPath=normalizePath(req.body.new_name);
+        const dbNewPath=normalizePath(req.body.new_path);
 
         if (dbOldPath === '/') {
             return res
@@ -308,6 +329,7 @@ export class FileSystemController {
             await fileRepo.remove(file);
             const new_file = fileRepo.create({
                 ...file,
+                ctime: Date.now(),
                 path: dbNewPath
             });
             await fileRepo.save(new_file);
@@ -332,18 +354,22 @@ export class FileSystemController {
         const fullFsPath = toFsPath(dbPath);
 
         const {
-            mode: rawMode,
+            perm: rawPerm,
             uid: rawUid,
             gid: rawGid,
             size: rawSize,
             // flags: rawFlags
         } = req.body;
-        
-        console.log(`Received attributes: mode=${rawMode}, uid=${rawUid}, gid=${rawGid}, size=${rawSize}`);
-        let newMode: number | undefined;
-        if (rawMode !== undefined && rawMode !== null) {
-            newMode = parseInt(rawMode, 10);
-            if (isNaN(newMode) || newMode < 0 || newMode > 0o777) {
+
+        // Da implementare vedendo se il group è esistente e se l'utente ha i permessi per cambiarlo
+        if (rawUid !== undefined && rawUid !== null || rawGid !== undefined && rawGid !== null) {
+            return res.status(401).json({ error: 'Changing ownership is not allowed' });
+        }
+
+        let newPerm: number | undefined;
+        if (rawPerm !== undefined && rawPerm !== null) {
+            newPerm = parseInt(rawPerm, 10);
+            if (isNaN(newPerm) || newPerm < 0 || newPerm > 0o777) {
                 return res.status(400).json({ error: 'Invalid mode (0–0o777)' });
             }
         }
@@ -356,6 +382,8 @@ export class FileSystemController {
             }
         }
 
+        const now= Date.now();
+
         try{
             const file = await fileRepo.findOneOrFail({
                 where: { path: dbPath },
@@ -366,14 +394,17 @@ export class FileSystemController {
                 return res.status(403).json({ error: `No permission on ${dbPath}` });
             }
 
-            if (newMode !== undefined && newMode !== null) {
-                // await fs.chmod(fullFsPath, newMode); // non c'è bisogno di cambiare i metadati effettivi del file
-                file.permissions = newMode;
+            if (newPerm !== undefined) {
+                // await fs.chmod(fullFsPath, newPerm); // non c'è bisogno di cambiare i metadati effettivi del file
+                file.permissions = newPerm;
+                file.ctime = now; // update ctime to reflect the change
             }
 
-            if (newSize !== undefined && newSize !== null) {
+            if (newSize !== undefined) {
                 await fs.truncate(fullFsPath, newSize);
                 file.size = newSize;
+                file.mtime = now; // update mtime to reflect the change
+                file.ctime = now; // update ctime to reflect the change
             }
 
             await fileRepo.save(file);

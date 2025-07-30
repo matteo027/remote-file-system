@@ -1,5 +1,5 @@
 use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
-use rfs_models::{FileChunk, FileEntry, RemoteBackend, SetAttrRequest, BackendError};
+use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError};
 use std::collections::HashMap;
 use libc::ENOENT;
 use std::{
@@ -72,7 +72,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
             atime: entry.atime,
             mtime: entry.mtime,
             ctime: entry.ctime,
-            crtime: entry.btime, // crtime is usually the same as ctime, to be checked
+            crtime: entry.btime,
             kind: if entry.is_dir {FileType::Directory} else {FileType::RegularFile},
             perm: entry.perms,
             nlink: entry.nlinks,
@@ -259,7 +259,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
     fn read(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,size: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyData,) {
         if let Some(path) = self.inode_to_path(ino) {
             match self.backend.read_chunk(path.to_str().unwrap(), offset as u64, size as u64) {
-                Ok(FileChunk { data, .. }) => reply.data(&data),
+                Ok(data) => reply.data(&data),
                 Err(e) => reply.error(map_error(&e)),
             }
         } else {
@@ -327,8 +327,10 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
         };
 
+        let perm = if let Some(m) = mode {Some(m & 0o777)} else {None};
+
         let new_set_attr = SetAttrRequest {
-            new_mode: mode,
+            perm,
             uid,
             gid,
             size,
