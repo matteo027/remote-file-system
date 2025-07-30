@@ -20,6 +20,8 @@ pub struct FileEntry {
     pub mtime: SystemTime,
     /// ctime in secondi dall'epoch
     pub ctime: SystemTime,
+    /// btime in secondi dall'epoch (creazione)
+    pub btime: SystemTime,
     /// permessi in formato octale (es. 0o755)
     pub perms: u16,
     /// numero di link

@@ -1,9 +1,10 @@
 use reqwest::cookie::Jar;
-use reqwest::{Client, StatusCode, Url};
-use rfs_models::{BackendError, FileEntry, RemoteBackend};
+use reqwest::{Client, Method, StatusCode, Url};
+use rfs_models::{BackendError, FileChunk, FileEntry, RemoteBackend, SetAttrRequest};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -14,24 +15,15 @@ struct ErrorResponse {
     error: String,
 }
 
-pub struct Server {
-    runtime: Runtime, // from tokio, used to manage async calls
-    address: Url,
-    client: Client,
-}
-
-#[derive(Serialize)]
-struct DirApisPayload {
-    path: String,
-}
 #[derive(Serialize)]
 struct LoginPayload {
     username: String, // it's the uid
     password: String,
 }
-#[derive(Deserialize)]
+
+#[derive(Deserialize,Debug)]
 struct FileServerResponse {
-    path: Box<Path>,
+    path: PathBuf,
     owner: u32,
     group: Option<u32>,
     #[serde(rename = "type")]
@@ -45,7 +37,13 @@ struct FileServerResponse {
     #[serde(deserialize_with = "deserialize_systemtime_from_millis")]
     ctime: SystemTime,
     #[serde(deserialize_with = "deserialize_systemtime_from_millis")]
-    btime: SystemTime,
+    btime: SystemTime, 
+}
+
+pub struct Server {
+    runtime: Runtime, // from tokio, used to manage async calls
+    base_url: Url,
+    client: Client,
 }
 
 fn deserialize_systemtime_from_millis<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
@@ -60,7 +58,7 @@ impl Server {
     pub fn new() -> Self {
         Self {
             runtime: Runtime::new().expect("Unable to built a Runtime object"),
-            address: Url::from_str("http://localhost:3000/").unwrap(), // meglio passarlo come parametro la metodo (?)
+            base_url: Url::from_str("http://localhost:3000/").unwrap(), // meglio passarlo come parametro la metodo (?)
             client: {
                 let cookie_jar = Arc::new(Jar::default());
                 // Build client with the cookie jar
@@ -74,7 +72,7 @@ impl Server {
 
     fn check_and_authenticate(&mut self) -> Result<(), BackendError> {
         let client = self.client.clone();
-        let address = self.address.clone();
+        let address = self.base_url.clone();
 
         // Spawn a new OS thread to handle the async login workflow
         let handle = std::thread::spawn(move || {
@@ -144,224 +142,106 @@ impl Server {
             .join()
             .unwrap_or_else(|e| Err(BackendError::Other(format!("Thread join failure: {:?}", e))))
     }
+
+    fn response_to_entry(file: FileServerResponse) -> FileEntry {
+        let name = file.path.file_name()
+            .unwrap_or_else(|| OsStr::new("/"))
+            .to_string_lossy()
+            .to_string();
+        let gid = file.group.unwrap_or(file.owner);
+        FileEntry {
+            ino: 0, // Inode number is not used in this context, set to 0, check if needed in cache layer
+            path: file.path.to_string_lossy().to_string(),
+            name,
+            is_dir: file.ty == 1, //TO DO: implement type conversion
+            size: file.size,
+            perms: file.permissions,
+            nlinks: if file.ty == 1 { 2 } else { 1 },
+            atime: file.atime,
+            mtime: file.mtime,
+            ctime: file.ctime,
+            btime: file.btime,
+            uid: file.owner,
+            gid,
+        }
+    }
+
+    fn request<R: DeserializeOwned + 'static>(&mut self, method: Method, endpoint: &str) -> Result<R, BackendError> {
+
+        let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
+        let req = self.client.request(method, url);
+        let resp = self.runtime.block_on(async {req.send().await.map_err(|e| BackendError::Other(e.to_string()))})?;
+        match resp.status() {
+            StatusCode::OK => self.runtime.block_on(async { resp.json().await.map_err(|_| BackendError::BadAnswerFormat) }),
+            StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+            StatusCode::CONFLICT => {
+                let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
+                Err(BackendError::Conflict(err))
+            }
+            _ => Err(BackendError::Other("Unexpected error".into())),
+        }
+    }
+
+    fn request_with_body<R: DeserializeOwned + 'static, B: Serialize>(&mut self,method: Method,endpoint: &str,body: &B) -> Result<R, BackendError> {
+        let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
+        let req = self.client.request(method, url).json(body);
+        let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
+        match resp.status() {
+            StatusCode::OK => self.runtime.block_on(async { resp.json().await.map_err(|_| BackendError::BadAnswerFormat) }),
+            StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+            StatusCode::CONFLICT => {
+                let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
+                Err(BackendError::Conflict(err))
+            }
+            _ => Err(BackendError::Other("Unexpected error".into())),
+        }
+    }
 }
 
 impl RemoteBackend for Server {
     fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
         self.check_and_authenticate()?;
-
-        let api_result = self.runtime.block_on(async {
-            let request_url = self
-                .address
-                .clone()
-                .join("api/directories/")
-                .unwrap()
-                .join(path.strip_prefix('/').unwrap_or(path))
-                .unwrap();
-            println!("url: {}", request_url);
-            let resp = self.client.get(request_url).send().await;
-
-            match resp {
-                Ok(resp) => {
-                    println!("status: {}", resp.status());
-                    match resp.status() {
-                        StatusCode::OK => match resp.json::<Vec<FileServerResponse>>().await {
-                            Ok(files) => {
-                                return Ok(files
-                                    .into_iter()
-                                    .map(|f| FileEntry {
-                                        ino: 0,
-                                        path: f.path.to_string_lossy().to_string(),
-                                        name: f
-                                            .path
-                                            .file_name()
-                                            .unwrap_or_else(|| OsStr::new("/"))
-                                            .to_string_lossy()
-                                            .to_string(),
-                                        is_dir: f.ty == 1,
-                                        size: f.size,
-                                        perms: f.permissions,
-                                        nlinks: 0,
-                                        atime: f.atime,
-                                        mtime: f.mtime,
-                                        ctime: f.ctime,
-                                        uid: f.owner,
-                                        gid: match f.group {
-                                            Some(g) => g,
-                                            None => f.owner,
-                                        },
-                                    })
-                                    .collect());
-                            }
-                            Err(e) => Err(BackendError::BadAnswerFormat),
-                        },
-                        StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
-                        StatusCode::CONFLICT => Err(BackendError::Conflict(
-                            resp.json::<ErrorResponse>().await.unwrap().error,
-                        )),
-                        StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
-                        _ => Err(BackendError::Other(String::from("Unknown error"))),
-                    }
-                }
-                Err(err) => Err(BackendError::Other(err.to_string())),
-            }
-        });
-
-        return api_result;
+        let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
+        let files: Vec<FileServerResponse> = self.request(Method::GET, &endpoint)?;
+        Ok(files.into_iter().map(Self::response_to_entry).collect())
     }
 
     fn create_dir(&mut self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
-
-        let api_result = self.runtime.block_on(async {
-            let request_url = self
-                .address
-                .clone()
-                .join("api/directories/")
-                .unwrap()
-                .join(path.strip_prefix('/').unwrap_or(path))
-                .unwrap();
-
-            let resp = self.client.post(request_url).send().await;
-            match resp {
-                Ok(resp) => match resp.status() {
-                    StatusCode::OK => match resp.json::<FileServerResponse>().await {
-                        Ok(file) => {
-                            let entry = FileEntry {
-                                ino: 0,
-                                name: file
-                                    .path
-                                    .file_name()
-                                    .unwrap_or_else(|| OsStr::new("/"))
-                                    .to_string_lossy()
-                                    .to_string(),
-                                path: file.path.to_string_lossy().to_string(),
-                                is_dir: file.ty == 1,
-                                size: file.size,
-                                perms: file.permissions,
-                                nlinks: 0,
-                                atime: file.atime,
-                                mtime: file.mtime,
-                                ctime: file.ctime,
-                                uid: file.owner,
-                                gid: file.group.unwrap_or(file.owner),
-                            };
-                            Ok(entry)
-                        }
-                        Err(_) => Err(BackendError::BadAnswerFormat),
-                    },
-                    StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
-                    StatusCode::CONFLICT => Err(BackendError::Conflict(
-                        resp.json::<ErrorResponse>().await.unwrap().error,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
-                    _ => Err(BackendError::Other(String::from("Unknown error"))),
-                },
-                Err(err) => Err(BackendError::Other(err.to_string())),
-            }
-        });
-
-        return api_result;
+        let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
+        let f: FileServerResponse = self.request(Method::POST, &endpoint)?;
+        Ok(Self::response_to_entry(f))
     }
 
     fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
         self.check_and_authenticate()?;
-
-        let api_result = self.runtime.block_on(async {
-            let request_url = self
-                .address
-                .clone()
-                .join("api/directories/")
-                .unwrap()
-                .join(path.strip_prefix('/').unwrap_or(path))
-                .unwrap();
-
-            let resp = self.client.delete(request_url).send().await;
-
-            match resp {
-                Ok(resp) => match resp.status() {
-                    StatusCode::OK => Ok(()),
-                    StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
-                    StatusCode::CONFLICT => Err(BackendError::Conflict(
-                        resp.json::<ErrorResponse>().await.unwrap().error,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
-                    _ => Err(BackendError::Other(String::from("Unknown error"))),
-                },
-                Err(err) => Err(BackendError::Other(err.to_string())),
-            }
-        });
-
-        return api_result;
+        let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
+        let _: serde_json::Value = self.request(Method::DELETE, &endpoint)?;
+        Ok(())
     }
 
     fn get_attr(&mut self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
-
-        let api_result = self.runtime.block_on(async {
-            let request_url = self
-                .address
-                .clone()
-                .join("api/mod/")
-                .unwrap()
-                .join(path.strip_prefix('/').unwrap_or(path))
-                .unwrap();
-            let resp = self.client.get(request_url).send().await;
-            match resp {
-                Ok(resp) => match resp.status() {
-                    StatusCode::OK => match resp.json::<FileServerResponse>().await {
-                        Ok(file) => {
-                            let entry = FileEntry {
-                                ino: 0,
-                                name: file
-                                    .path
-                                    .file_name()
-                                    .unwrap_or_else(|| OsStr::new("/"))
-                                    .to_string_lossy()
-                                    .to_string(),
-                                path: file.path.to_string_lossy().to_string().to_string(),
-                                is_dir: file.ty == 1,
-                                size: file.size,
-                                atime: file.atime,
-                                mtime: file.mtime,
-                                ctime: file.ctime,
-                                perms: file.permissions,
-                                nlinks: 2,
-                                uid: file.owner,
-                                gid: file.group.unwrap_or(file.owner),
-                            };
-                            Ok(entry)
-                        }
-                        Err(_) => Err(BackendError::BadAnswerFormat),
-                    },
-                    StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
-                    StatusCode::CONFLICT => Err(BackendError::Conflict(
-                        resp.json::<ErrorResponse>().await.unwrap().error,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR => Err(BackendError::InternalServerError),
-                    _ => Err(BackendError::Other(String::from("Unknown error"))),
-                },
-                Err(err) => Err(BackendError::Other(err.to_string())),
-            }
-        });
-
-        return api_result;
+        let endpoint = format!("api/mod/{}", path.trim_start_matches('/'));
+        let f: FileServerResponse = self.request(Method::GET, &endpoint)?;
+        Ok(Self::response_to_entry(f))
     }
 
     fn create_file(&mut self, path: &str) -> Result<FileEntry, BackendError> {
-        todo!()
+        self.check_and_authenticate()?;
+        let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
+        let f: FileServerResponse = self.request(Method::POST, &endpoint)?;
+        Ok(Self::response_to_entry(f))
     }
 
     fn delete_file(&mut self, path: &str) -> Result<(), BackendError> {
-        todo!()
+        self.check_and_authenticate()?;
+        let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
+        let _: serde_json::Value = self.request(Method::DELETE, &endpoint)?;
+        Ok(())
     }
 
-    fn read_chunk(
-        &mut self,
-        path: &str,
-        offset: u64,
-        size: u64,
-    ) -> Result<rfs_models::FileChunk, BackendError> {
+    fn read_chunk(&mut self,path: &str,offset: u64,size: u64) -> Result<FileChunk, BackendError> {
         todo!()
     }
 
@@ -373,11 +253,7 @@ impl RemoteBackend for Server {
         todo!()
     }
 
-    fn set_attr(
-        &mut self,
-        path: &str,
-        attrs: rfs_models::SetAttrRequest,
-    ) -> Result<FileEntry, BackendError> {
+    fn set_attr(&mut self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
         todo!()
     }
 }

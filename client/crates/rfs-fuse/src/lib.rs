@@ -68,12 +68,8 @@ impl<B: RemoteBackend> RemoteFS<B> {
             atime: entry.atime,
             mtime: entry.mtime,
             ctime: entry.ctime,
-            crtime: entry.ctime, // crtime is usually the same as ctime, to be checked
-            kind: if entry.is_dir {
-                FileType::Directory
-            } else {
-                FileType::RegularFile
-            },
+            crtime: entry.btime, // crtime is usually the same as ctime, to be checked
+            kind: if entry.is_dir {FileType::Directory} else {FileType::RegularFile},
             perm: entry.perms,
             nlink: entry.nlinks,
             uid: entry.uid,
