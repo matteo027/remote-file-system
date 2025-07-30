@@ -65,7 +65,7 @@ GET http://localhost:3000/api/files/5000/prova.txt
 DELETE   http://localhost:3000/api/files/5000/prova.txt
 
 ###
-PUT http://localhost:3000/api/files/5000/prova.txt
+PATCH http://localhost:3000/api/files/5000/prova.txt
 Content-Type: application/json
 
 {
@@ -74,15 +74,15 @@ Content-Type: application/json
 
 
 ###
-PUT http://localhost:3000/api/mod/5000/prova.txt
+PATCH  http://localhost:3000/api/files/attributes/file.txt
 Content-Type: application/json
 
 {
-  "new_mod": 292
+  "mode": 292
 }
 
 ###
-GET http://localhost:3000/api/mod/
+GET http://localhost:3000/api/files/attributes/
 Content-Type: application/json
 
 {}

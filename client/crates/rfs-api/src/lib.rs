@@ -222,7 +222,7 @@ impl RemoteBackend for Server {
 
     fn get_attr(&mut self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
-        let endpoint = format!("api/mod/{}", path.trim_start_matches('/'));
+        let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request(Method::GET, &endpoint)?;
         Ok(Self::response_to_entry(f))
     }
@@ -241,19 +241,27 @@ impl RemoteBackend for Server {
         Ok(())
     }
 
+    #[allow(unused_variables)]
     fn read_chunk(&mut self,path: &str,offset: u64,size: u64) -> Result<FileChunk, BackendError> {
         todo!()
     }
 
+    #[allow(unused_variables)]
     fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
         todo!()
     }
 
+    #[allow(unused_variables)]
     fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
         todo!()
     }
 
     fn set_attr(&mut self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
-        todo!()
+        self.check_and_authenticate()?;
+        let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
+        let body = serde_json::to_value(attrs).map_err(|e| BackendError::Other(e.to_string()))?;
+        let f: FileServerResponse = self.request_with_body(Method::PATCH, &endpoint, &body)?;
+        
+        Ok(Self::response_to_entry(f))
     }
 }
