@@ -166,8 +166,22 @@ impl Server {
         }
     }
 
-    fn request<R: DeserializeOwned + 'static>(&mut self, method: Method, endpoint: &str) -> Result<R, BackendError> {
+    fn request_no_response(&mut self, method: Method, endpoint: &str) -> Result<(), BackendError> {
+        let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
+        let req = self.client.request(method, url);
+        let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
+        match resp.status() {
+            StatusCode::OK => Ok(()),
+            StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+            StatusCode::CONFLICT => {
+                let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
+                Err(BackendError::Conflict(err))
+            }
+            _ => Err(BackendError::Other("Unexpected error".into())),
+        }
+    }
 
+    fn request<R: DeserializeOwned + 'static>(&mut self, method: Method, endpoint: &str) -> Result<R, BackendError> {
         let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req = self.client.request(method, url);
         let resp = self.runtime.block_on(async {req.send().await.map_err(|e| BackendError::Other(e.to_string()))})?;
@@ -216,7 +230,7 @@ impl RemoteBackend for Server {
     fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
-        let _: serde_json::Value = self.request(Method::DELETE, &endpoint)?;
+        self.request_no_response(Method::DELETE, &endpoint)?;
         Ok(())
     }
 
@@ -237,23 +251,35 @@ impl RemoteBackend for Server {
     fn delete_file(&mut self, path: &str) -> Result<(), BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
-        let _: serde_json::Value = self.request(Method::DELETE, &endpoint)?;
+        self.request_no_response(Method::DELETE, &endpoint)?;
         Ok(())
     }
 
-    #[allow(unused_variables)]
     fn read_chunk(&mut self,path: &str,offset: u64,size: u64) -> Result<FileChunk, BackendError> {
-        todo!()
+        self.check_and_authenticate()?;
+        let endpoint = format!("api/files/chunk/{}/{}", path.trim_start_matches('/'), offset);
+        let resp: FileChunk = self.request(Method::GET, &endpoint)?;
+        if resp.data.len() as u64 != size {
+            return Err(BackendError::BadAnswerFormat);
+        }
+        Ok(resp)
     }
 
-    #[allow(unused_variables)]
     fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
-        todo!()
+        self.check_and_authenticate()?;
+        let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
+        let body = serde_json::json!({ "offset": offset, "data": data });
+        let resp: serde_json::Value = self.request_with_body(Method::PUT, &endpoint, &body)?;
+        Ok(resp["size"].as_u64().unwrap_or(0))
     }
 
-    #[allow(unused_variables)]
     fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
-        todo!()
+        self.check_and_authenticate()?;
+        let endpoint = format!("api/files/{}", old_path.trim_start_matches('/'));
+        let body = serde_json::json!({ "new_path": new_path.trim_start_matches('/') });
+        let f: FileServerResponse = self.request_with_body(Method::PATCH, &endpoint, &body)?;
+        
+        Ok(Self::response_to_entry(f))
     }
 
     fn set_attr(&mut self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {

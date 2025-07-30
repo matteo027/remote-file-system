@@ -327,8 +327,10 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
         };
 
+        let perm = if let Some(m) = mode {Some(m & 0o777)} else {None};
+
         let new_set_attr = SetAttrRequest {
-            new_mode: mode,
+            perm,
             uid,
             gid,
             size,

@@ -41,13 +41,14 @@ pub enum FileType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetAttrRequest {
-    pub new_mode: Option<u32>,
+    pub perm: Option<u32>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
     pub size: Option<u64>,
     pub flags: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChunk {
     pub data: Vec<u8>,
     pub offset: u64,

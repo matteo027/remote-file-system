@@ -182,7 +182,7 @@ export class FileSystemController {
         const dbPath    = normalizePath(req.params.path);
         const fullFsPath = toFsPath(dbPath);
 
-        const text: string = req.body.text;
+        const text: string = req.body.data;
         const user: User = req.user as User;
         if (user === null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
@@ -229,7 +229,7 @@ export class FileSystemController {
                 return res.status(403).json({ error: 'You have not the permission to read the content the file ' + dbPath });
 
             const content = await fs.readFile(fullFsPath, { flag: "r" });
-            res.json({ bytes: content.toString(), offset: 0 });
+            res.json({ data: content.toString(), offset: 0 });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -277,11 +277,11 @@ export class FileSystemController {
 
     public rename = async (req: Request, res: Response) => {
 
-        if (req.body.new_name === undefined)
+        if (req.body.new_path === undefined)
             return res.status(400).json({ error: 'Bad format: new file name parameter is missing' });
 
         const dbOldPath=normalizePath(req.params.path);
-        const dbNewPath=normalizePath(req.body.new_name);
+        const dbNewPath=normalizePath(req.body.new_path);
 
         if (dbOldPath === '/') {
             return res
@@ -332,18 +332,22 @@ export class FileSystemController {
         const fullFsPath = toFsPath(dbPath);
 
         const {
-            mode: rawMode,
+            perm: rawPerm,
             uid: rawUid,
             gid: rawGid,
             size: rawSize,
             // flags: rawFlags
         } = req.body;
-        
-        console.log(`Received attributes: mode=${rawMode}, uid=${rawUid}, gid=${rawGid}, size=${rawSize}`);
-        let newMode: number | undefined;
-        if (rawMode !== undefined && rawMode !== null) {
-            newMode = parseInt(rawMode, 10);
-            if (isNaN(newMode) || newMode < 0 || newMode > 0o777) {
+
+        // Da implementare vedendo se il group è esistente e se l'utente ha i permessi per cambiarlo
+        if (rawUid !== undefined && rawUid !== null || rawGid !== undefined && rawGid !== null) {
+            return res.status(401).json({ error: 'Changing ownership is not allowed' });
+        }
+
+        let newPerm: number | undefined;
+        if (rawPerm !== undefined && rawPerm !== null) {
+            newPerm = parseInt(rawPerm, 10);
+            if (isNaN(newPerm) || newPerm < 0 || newPerm > 0o777) {
                 return res.status(400).json({ error: 'Invalid mode (0–0o777)' });
             }
         }
@@ -366,12 +370,12 @@ export class FileSystemController {
                 return res.status(403).json({ error: `No permission on ${dbPath}` });
             }
 
-            if (newMode !== undefined && newMode !== null) {
-                // await fs.chmod(fullFsPath, newMode); // non c'è bisogno di cambiare i metadati effettivi del file
-                file.permissions = newMode;
+            if (newPerm !== undefined) {
+                // await fs.chmod(fullFsPath, newPerm); // non c'è bisogno di cambiare i metadati effettivi del file
+                file.permissions = newPerm;
             }
 
-            if (newSize !== undefined && newSize !== null) {
+            if (newSize !== undefined) {
                 await fs.truncate(fullFsPath, newSize);
                 file.size = newSize;
             }
