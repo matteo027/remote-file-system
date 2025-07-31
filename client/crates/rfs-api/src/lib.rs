@@ -47,6 +47,7 @@ pub struct Server {
     runtime: Runtime, // from tokio, used to manage async calls
     base_url: Url,
     client: Client,
+    cookie_jar: Arc<Jar>
 }
 
 fn deserialize_systemtime_from_millis<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
@@ -59,23 +60,23 @@ where
 
 impl Server {
     pub fn new() -> Self {
+        let cookie_jar = Arc::new(Jar::default());
+        let client = reqwest::Client::builder()
+            .cookie_provider(cookie_jar.clone())
+            .build()
+            .expect("Unable to build the Client object");
         Self {
             runtime: Runtime::new().expect("Unable to built a Runtime object"),
             base_url: Url::from_str("http://localhost:3000/").unwrap(), // meglio passarlo come parametro la metodo (?)
-            client: {
-                let cookie_jar = Arc::new(Jar::default());
-                // Build client with the cookie jar
-                reqwest::Client::builder()
-                    .cookie_provider(Arc::clone(&cookie_jar))
-                    .build()
-                    .expect("Unable to build the Client object")
-            },
+            client,
+            cookie_jar
         }
     }
 
     fn check_and_authenticate(&mut self) -> Result<(), BackendError> {
         let client = self.client.clone();
         let address = self.base_url.clone();
+        let cookie_jar = self.cookie_jar.clone();
 
         // Spawn a new OS thread to handle the async login workflow
         let handle = std::thread::spawn(move || {
@@ -88,17 +89,15 @@ impl Server {
 
 
                 // trying to read from /temp/rfs-token
-                let mut cookie= String::new();
-
                 if let Ok(token) = fs::read_to_string("/tmp/rfs-token") {
-                    cookie = format!("connect.sid={}", token.trim());
+                    let cookie_str = format!("connect.sid={}", token.trim());
+                    cookie_jar.add_cookie_str(&cookie_str, &address);
                 }
 
                 // Step 1: check /api/me
                 let me_url = address.join("api/me").unwrap();
                 let resp = client
                     .get(me_url.clone())
-                    .header(COOKIE, HeaderValue::from_str(&cookie).unwrap())
                     .send()
                     .await
 
