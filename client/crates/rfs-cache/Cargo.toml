@@ -4,3 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+lru = "0.16.0"
+rfs-models = { version = "0.1.0", path = "../rfs-models" }

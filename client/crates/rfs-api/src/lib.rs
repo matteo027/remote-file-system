@@ -70,7 +70,7 @@ impl Server {
         }
     }
 
-    fn check_and_authenticate(&mut self) -> Result<(), BackendError> {
+    fn check_and_authenticate(&self) -> Result<(), BackendError> {
         let client = self.client.clone();
         let address = self.base_url.clone();
 
@@ -79,7 +79,7 @@ impl Server {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("Unable to geenrate e tokio Runtime");
+                .expect("Unable to generate tokio Runtime");
 
             rt.block_on(async move {
                 // Step 1: check /api/me
@@ -166,7 +166,7 @@ impl Server {
         }
     }
 
-    fn request_no_response(&mut self, method: Method, endpoint: &str) -> Result<(), BackendError> {
+    fn request_no_response(&self, method: Method, endpoint: &str) -> Result<(), BackendError> {
         let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req = self.client.request(method, url);
         let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
@@ -181,7 +181,7 @@ impl Server {
         }
     }
 
-    fn request<R: DeserializeOwned + 'static>(&mut self, method: Method, endpoint: &str) -> Result<R, BackendError> {
+    fn request<R: DeserializeOwned + 'static>(&self, method: Method, endpoint: &str) -> Result<R, BackendError> {
         let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req = self.client.request(method, url);
         let resp = self.runtime.block_on(async {req.send().await.map_err(|e| BackendError::Other(e.to_string()))})?;
@@ -196,7 +196,7 @@ impl Server {
         }
     }
 
-    fn request_with_body<R: DeserializeOwned + 'static, B: Serialize>(&mut self,method: Method,endpoint: &str,body: &B) -> Result<R, BackendError> {
+    fn request_with_body<R: DeserializeOwned + 'static, B: Serialize>(&self,method: Method,endpoint: &str,body: &B) -> Result<R, BackendError> {
         let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req = self.client.request(method, url).json(body);
         let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
@@ -213,56 +213,56 @@ impl Server {
 }
 
 impl RemoteBackend for Server {
-    fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
+    fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let files: Vec<FileServerResponse> = self.request(Method::GET, &endpoint)?;
         Ok(files.into_iter().map(Self::response_to_entry).collect())
     }
 
-    fn create_dir(&mut self, path: &str) -> Result<FileEntry, BackendError> {
+    fn create_dir(&self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request(Method::POST, &endpoint)?;
         Ok(Self::response_to_entry(f))
     }
 
-    fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
+    fn delete_dir(&self, path: &str) -> Result<(), BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         self.request_no_response(Method::DELETE, &endpoint)?;
         Ok(())
     }
 
-    fn get_attr(&mut self, path: &str) -> Result<FileEntry, BackendError> {
+    fn get_attr(&self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request(Method::GET, &endpoint)?;
         Ok(Self::response_to_entry(f))
     }
 
-    fn create_file(&mut self, path: &str) -> Result<FileEntry, BackendError> {
+    fn create_file(&self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request(Method::POST, &endpoint)?;
         Ok(Self::response_to_entry(f))
     }
 
-    fn delete_file(&mut self, path: &str) -> Result<(), BackendError> {
+    fn delete_file(&self, path: &str) -> Result<(), BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         self.request_no_response(Method::DELETE, &endpoint)?;
         Ok(())
     }
 
-    fn read_chunk(&mut self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
+    fn read_chunk(&self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}?offset={}&size={}", path.trim_start_matches('/'), offset, size);
         let resp: serde_json::Value = self.request(Method::GET, &endpoint)?;
         Ok(resp["data"].as_str().map(|s| s.as_bytes().to_vec()).unwrap_or_default())
     }
 
-    fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
+    fn write_chunk(&self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         let body = serde_json::json!({ "offset": offset, "data": data });
@@ -270,7 +270,7 @@ impl RemoteBackend for Server {
         Ok(resp["bytes"].as_u64().unwrap_or(0))
     }
 
-    fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
+    fn rename(&self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", old_path.trim_start_matches('/'));
         let body = serde_json::json!({ "new_path": new_path.trim_start_matches('/') });
@@ -279,7 +279,7 @@ impl RemoteBackend for Server {
         Ok(Self::response_to_entry(f))
     }
 
-    fn set_attr(&mut self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
+    fn set_attr(&self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let body = serde_json::to_value(attrs).map_err(|e| BackendError::Other(e.to_string()))?;
