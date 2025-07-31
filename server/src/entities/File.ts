@@ -22,9 +22,6 @@ export class File {
   group: Group;
 
   @Column()
-  size: number;
-
-  @Column()
   atime: number; // last access time
 
   @Column()

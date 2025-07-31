@@ -64,7 +64,8 @@ export class FileSystemController {
                     if (!file) {
                         throw new Error(`Mismatch between the file system and the database for file: ${childPath}`);
                     }
-                    return { ...file, owner: file.owner.uid, group: file.group?.gid };
+                    const size: number = (await fs.stat(toFsPath(childPath))).size;
+                    return { ...file, owner: file.owner.uid, group: file.group?.gid, size: size };
                 })
             );
             return res.json(content);
@@ -103,7 +104,11 @@ export class FileSystemController {
                 btime: now
             } as File;
             await fileRepo.save(directory);
-            return res.status(200).json({...directory, owner: user.uid, group: user_group?.gid});
+
+            // retreiving file size dinamically
+            const size: number = (await fs.stat(fullFsPath)).size;
+
+            return res.status(200).json({...directory, owner: user.uid, group: user_group?.gid, size: size});
         } catch (err: any) {
             if (err.code === 'EEXIST') { // Error Exists
                 return res.status(409).json({ error: 'Folder already exists' });
@@ -166,7 +171,11 @@ export class FileSystemController {
                 btime: now
             } as File;
             await fileRepo.save(file);
-            res.status(200).json({ ...file, owner: user.uid, group: user_group?.gid });
+
+            // retreiving file size dinamically
+            const size: number = (await fs.stat(fullFsPath)).size;
+
+            res.status(200).json({ ...file, owner: user.uid, group: user_group?.gid, size: size });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'Directory not found' });
@@ -190,7 +199,7 @@ export class FileSystemController {
         }
 
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
-        const now= Date.now();
+        const now = Date.now();
 
         try {
 
@@ -202,7 +211,6 @@ export class FileSystemController {
                 return res.status(403).json({ error: 'You have not the permission to write on the file ' + dbPath });
 
             
-            file.size = Math.max(file.size, offset + text.length); // se sovrascrivo parte del file non aggiorno, se vado oltre all'attuale lunghezza aggiorno
             file.mtime = now;
             file.ctime = now;
 
@@ -333,7 +341,11 @@ export class FileSystemController {
                 path: dbNewPath
             });
             await fileRepo.save(new_file);
-            res.status(200).json({ ...new_file, owner: new_file.owner.uid, group: new_file.group?.gid });
+
+            // retreiving file size dinamically
+            const size: number = (await fs.stat(fullNewFsPath)).size;
+
+            res.status(200).json({ ...new_file, owner: new_file.owner.uid, group: new_file.group?.gid, size: size });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
@@ -382,7 +394,7 @@ export class FileSystemController {
             }
         }
 
-        const now= Date.now();
+        const now = Date.now();
 
         try{
             const file = await fileRepo.findOneOrFail({
@@ -402,13 +414,14 @@ export class FileSystemController {
 
             if (newSize !== undefined) {
                 await fs.truncate(fullFsPath, newSize);
-                file.size = newSize;
                 file.mtime = now; // update mtime to reflect the change
                 file.ctime = now; // update ctime to reflect the change
             }
+            // retreiving file size dinamically
+            const size: number = (await fs.stat(fullFsPath)).size;
 
             await fileRepo.save(file);
-            return res.status(200).json({...file, owner: file.owner.uid, group: file.group?.gid});
+            return res.status(200).json({...file, owner: file.owner.uid, group: file.group?.gid, size: size });
         } catch (err: any) {
             if (err.name === 'EntityNotFound') {
                 return res.status(404).json({ error: 'File not found' });
@@ -437,8 +450,10 @@ export class FileSystemController {
             }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to visualize the file ' + dbPath });
+            // retreiving file size dinamically
+            const size: number = (await fs.stat(toFsPath(dbPath))).size;
 
-            res.status(200).json({ ...file, owner: file.owner.uid, group: file.group?.gid });
+            res.status(200).json({ ...file, owner: file.owner.uid, group: file.group?.gid, size: size });
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });
