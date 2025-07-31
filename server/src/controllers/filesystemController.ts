@@ -1,10 +1,12 @@
 import { Request, Response } from 'express';
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';     
 import path_manipulator from 'node:path';
 import { AppDataSource } from '../data-source';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import { Group } from '../entities/Group';
+import { pipeline, Writable } from 'node:stream';
 
 const FS_ROOT = path_manipulator.join(__dirname, '..', '..', 'file-system');
 const fileRepo = AppDataSource.getRepository(File);
@@ -254,11 +256,18 @@ export class FileSystemController {
             file.atime = now;
             await fileRepo.save(file); // update access time before reading
 
-            const fh = await fs.open(fullFsPath, "r");
-            const buffer = Buffer.alloc(Number(size));
-            await fh.read(buffer, 0, Number(size), Number(offset));
-            await fh.close();
-            res.json({ data: buffer.toString("utf-8")}); //offset non serve al ritorno
+            //const fh = await fs.open(fullFsPath, "r");
+            //const buffer = Buffer.alloc(Number(size));
+            //await fh.read(buffer, 0, Number(size), Number(offset));
+            //await fh.close();
+
+            console.log("all right...")
+            const readStream = fsSync.createReadStream(fullFsPath, { start: offset , end: offset+size });
+            console.log("stream made");
+            readStream.pipe(res);
+            console.log("pipe sent");
+
+            //res.json({ data: buffer.toString("utf-8")}); //offset non serve al ritorno
         } catch (err: any) {
             if (err.code === 'ENOENT') {
                 res.status(404).json({ error: 'File not found' });

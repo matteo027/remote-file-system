@@ -8,10 +8,14 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::str::FromStr;
+use std::pin::Pin;
+use std::str::{Bytes, FromStr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
+use tokio_stream::Stream;
+use futures_util::stream::TryStreamExt;
+use futures_util::StreamExt;
 
 #[derive(Deserialize, Debug)]
 struct ErrorResponse {
@@ -243,6 +247,38 @@ impl Server {
             _ => Err(BackendError::Other("Unexpected error".into())),
         }
     }
+
+    fn request_stream(&mut self,method: Method,endpoint: &str) -> Result<Pin<Box<dyn Stream<Item = Result<bytes::Bytes, BackendError>> + Send>>, BackendError> {
+        let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
+        let req = self.client.request(method, url);
+        println!("req built");
+        let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
+        println!("Server responsed: {}", resp.status());
+        match resp.status() {
+            StatusCode::OK => Ok(Box::pin(resp.bytes_stream().map_err(|e| BackendError::Other(e.to_string())))),
+            StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+            StatusCode::CONFLICT => {
+                let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
+                Err(BackendError::Conflict(err))
+            }
+            _ => Err(BackendError::Other("Unexpected error".into())),
+        }
+    }
+
+    fn request_with_body_stream<B: Serialize>(&mut self,method: Method,endpoint: &str,body: &B) -> Result<Pin<Box<dyn Stream<Item = Result<bytes::Bytes, BackendError>> + Send>>, BackendError> {
+        let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
+        let req = self.client.request(method, url).json(body);
+        let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
+        match resp.status() {
+            StatusCode::OK => Ok(Box::pin(resp.bytes_stream().map_err(|e| BackendError::Other(e.to_string())))),
+            StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
+            StatusCode::CONFLICT => {
+                let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
+                Err(BackendError::Conflict(err))
+            }
+            _ => Err(BackendError::Other("Unexpected error".into())),
+        }
+    }
 }
 
 impl RemoteBackend for Server {
@@ -290,12 +326,24 @@ impl RemoteBackend for Server {
 
     fn read_chunk(&mut self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
         self.check_and_authenticate()?;
+        println!("in");
         let endpoint = format!("api/files/{}?offset={}&size={}", path.trim_start_matches('/'), offset, size);
-        let resp: serde_json::Value = self.request(Method::GET, &endpoint)?;
-        Ok(resp["data"].as_str().map(|s| s.as_bytes().to_vec()).unwrap_or_default())
+        let mut stream = self.request_stream(Method::GET, &endpoint)?;
+        println!("Stream received");
+        let mut data = Vec::<u8>::new();
+
+        self.runtime.block_on(async {
+            while let Some(chunk) = stream.next().await {
+                let bytes = chunk.expect("Unable to read the chunck");
+                println!("Chunck: {:?}", bytes);
+                data.extend_from_slice(&bytes);
+            }
+        });
+
+        Ok(data)
     }
 
-    fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
+    fn write_chunk(&mut self, path: &str, offset: u64, mut data: Vec<u8>) -> Result<u64, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         let body = serde_json::json!({ "offset": offset, "data": data });
