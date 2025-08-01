@@ -40,7 +40,7 @@ struct FileServerResponse {
     btime: SystemTime, 
 }
 
-pub struct Server {
+pub struct HttpBackend {
     runtime: Runtime, // from tokio, used to manage async calls
     base_url: Url,
     client: Client,
@@ -54,7 +54,7 @@ where
     Ok(UNIX_EPOCH + Duration::from_millis(millis))
 }
 
-impl Server {
+impl HttpBackend {
     pub fn new() -> Self {
         Self {
             runtime: Runtime::new().expect("Unable to built a Runtime object"),
@@ -212,7 +212,7 @@ impl Server {
     }
 }
 
-impl RemoteBackend for Server {
+impl RemoteBackend for HttpBackend {
     fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));

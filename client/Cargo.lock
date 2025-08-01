@@ -1058,6 +1058,7 @@ dependencies = [
  "clap",
  "fuser",
  "rfs-api",
+ "rfs-cache",
  "rfs-fuse",
  "rfs-models",
 ]

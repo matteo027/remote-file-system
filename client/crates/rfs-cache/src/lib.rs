@@ -6,9 +6,9 @@ use std::path::Path;
 
 type FileChunkKey = (String, u64, u64); // (path, offset, length)
 
-// DA CONTROLLARE LA POLITICA DI POPOLAMENTO E DEL CACHING O WRITE SE E COERENTE SU TUTTO IL FILE
+// implementato meccanismo di cache on write tranne sulla risoluzione di list_dir dopo una creazione/rimozione
 
-struct Cache <B:RemoteBackend>{
+pub struct Cache <B:RemoteBackend>{
     // chiamata al backend remoto
     http_backend: B,
     // cache tra path e FileEntry, serve per get_attr e set_attr
@@ -34,6 +34,7 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
     fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
         let mut cache = self.dir_cache.lock().unwrap();
         if let Some(entries) = cache.get(path) {
+            println!("Cache hit for list_dir({})", path);
             return Ok(entries.clone());
         }
         drop(cache); // Rilascia il lock prima di chiamare il backend
@@ -53,6 +54,7 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
     fn get_attr(&self, path: &str) -> Result<FileEntry, BackendError> {
         let mut cache = self.attr_cache.lock().unwrap();
         if let Some(entry) = cache.get(path) {
+            println!("Cache hit for get_attr({})", path);
             return Ok(entry.clone());
         }
         drop(cache); // Rilascia il lock prima di chiamare il backend
@@ -61,15 +63,12 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         Ok(entry)
     }
 
+    // Invalido solo la cache del padre, non carico i nuovi attributi del file nella cache directory
     fn create_file(&self, path: &str) -> Result<FileEntry, BackendError> {
         let entry = self.http_backend.create_file(path)?;
         if let Some(parent) = Path::new(path).parent().and_then(|p| p.to_str()) {
             // Aggiorno la cache della directory padre
-            let mut dir_cache = self.dir_cache.lock().unwrap();
-            if let Some(entries) = dir_cache.get_mut(parent) {
-                // invalido la cache sulla directory padre
-               self.dir_cache.lock().unwrap().pop(parent);
-            }
+            self.dir_cache.lock().unwrap().pop(parent);
         }
         self.attr_cache.lock().unwrap().put(path.to_string(), entry.clone());
         Ok(entry)
@@ -116,6 +115,7 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         let key = (path.to_string(), offset, size);
         let mut cache = self.file_chunk_cache.lock().unwrap();
         if let Some(data) = cache.get(&key) {
+            println!("Cache hit for read_chunk({}, {}, {})", path, offset, size);
             return Ok(data.clone());
         }
         drop(cache); // Rilascia il lock prima di chiamare il backend
@@ -135,6 +135,8 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         for key in keys {
             file_cache.pop(&key);
         }
+        // Aggiungo il nuovo chunk scritto nella cache
+        file_cache.put((path.to_string(), offset, n), data);
         Ok(n)
     }
 
@@ -161,7 +163,8 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
 
     fn set_attr(&self, path: &str, attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
         let entry = self.http_backend.set_attr(path, attrs)?;
-        self.attr_cache.lock().unwrap().pop(path);
+        // put fa già override sulla cache
+        self.attr_cache.lock().unwrap().put(path.to_string(), entry.clone());
         Ok(entry)
     }
 }
