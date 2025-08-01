@@ -1,160 +1,295 @@
-# remote-file-system
-Rust project - remote file system
+# API del FileSystem
 
-📁 API Documentation
-🔐 Authentication Endpoints
-POST /api/login
+Tutte le rotte richiedono autenticazione (middleware `isLoggedIn`).
 
-Authenticate a user using Passport's local strategy.
 
-    Auth required: No
+## GET /api/directories/{*path}
 
-    Body parameters:
+**Descrizione:**  
+Restituisce la lista di cartelle e file contenuti nella directory indicata dal path.
 
-        username (string)
+**Parametri:**  
+- `path` (string): percorso relativo alla root remota (esempio: `5000/progetti`)
 
-        password (string)
+**Corpo della richiesta:**  
+Nessuno
 
-    Response:
+**Risposta:**  
+Lista degli elementi contenuti nella directory (file e cartelle).
 
-        200 OK on success
+**Tipo di ritorno:**  
+```json
+[
+  {
+    "name": "nome_file_o_cartella",
+    "type": "file" | "directory",
+    "size": 1234,
+    "perm": 493
+  },
+  ...
+]
+```
 
-        401 Unauthorized on failure
+---
 
-POST /api/logout
+## GET /api/files/{*path}
 
-Logs out the currently authenticated user.
+**Descrizione:**  
+Restituisce i metadati del file o directory indicata dal path.
+
+**Parametri:**  
+- `path` (string): percorso relativo al file o directory remoto.
+
+**Corpo della richiesta:**  
+Nessuno
 
-    Auth required: Yes
+**Risposta:**  
+Metadati del file o directory richiesto.
 
-    Response:
+**Tipo di ritorno:**  
+```json
+{
+  "path": "/5000/appunti.txt",
+  "owner": 5000,
+  "group": 5000,
+  "permissions": 420,
+  "type": 0,
+  "size": 1024,
+  "atime": 1699999999999,
+  "mtime": 1699999999999,
+  "ctime": 1699999999999,
+  "btime": 1699999999999
+}
+```
 
-        200 OK on success
+---
 
-GET /api/me
+## POST /api/files/{*path}
 
-Returns information about the currently logged-in user.
+**Descrizione:**  
+Aggiorna i metadati del file o directory indicata dal path.
 
-    Auth required: Yes
+**Parametri:**  
+- `path` (string): percorso relativo al file o directory remoto.
 
-    Response:
+**Corpo della richiesta:**  
+```json
+{
+  "name": "nuovo_nome",          // opzionale, string
+  "perm": 493                   // opzionale, intero (permessi)
+}
+```
 
-        200 OK with user info
+---
 
-        401 Unauthorized if not authenticated
+## DELETE /api/files/{*path}
 
-📂 Filesystem Endpoints
+**Descrizione:**  
+Elimina il file o la directory specificata dal percorso.
 
-All the following routes require authentication.
-Directories
-GET /api/directories/*
+**Parametri:**  
+- `path` (string): percorso relativo del file o directory da eliminare.
 
-List contents of a directory.
+**Risposta:**  
+Conferma dell'eliminazione.
 
-    Example: /api/directories/home/user/docs
+**Tipo di ritorno:**  
+```json
+{
+  "success": true,
+  "message": "File o directory eliminata con successo."
+}
+```
 
-    Response:
+---
 
-        200 OK with directory listing
+## PATCH /api/files/{*path}
 
-POST /api/directories/*
+**Descrizione:**  
+Rinomina un file o una directory.
 
-Create a new directory.
+**Parametri URL:**
+- `path` (string): percorso del file/directory da rinominare.
 
-    Example: /api/directories/home/user/newFolder
+**Corpo della richiesta (JSON):**
+```json
+{
+  "new_path": "/nuovo/percorso/del/file"
+}
+```
+
+**Ritorna:**
+Metadati aggiornati del file o della directory rinominata.
+
+**Tipo di ritorno (JSON):**
 
-    Response:
+```json
+{
+  "path": "/nuovo/percorso/del/file",
+  "owner": 1000,
+  "group": 1000,
+  "permissions": 493,
+  "type": 0,
+  "size": 2048,
+  "atime": 1699999999999,
+  "mtime": 1699999999999,
+  "ctime": 1699999999999,
+  "btime": 1699999999999
+}
+```
+
+---
+
+## PUT /api/files/{*path}
+
+**Descrizione:**
+Scrive contenuti binari o testuali su un file, a partire da un offset.
+
+**Parametri URL**
+- `path` (nel percorso): path relativo del file da scrivere.
+
+**Headers supportati**
+- `X-Chunk-Offset` (opzionale): posizione (offset in byte) da cui iniziare a scrivere. Default: 0.
+
+Contenuto binario (stream) del file da scrivere.
+
+**Ritorna:**  
+Il numero di byte scritti correttamente.
+
+**Tipo di ritorno**
+```json
+{
+  "bytes": 1024
+}
+```
+
+---
+
+## GET /api/files/attributes/{*path}
+
+**Descrizione:**
+Restituisce i metadati di un file o directory.
+
+**Parametri URL:**
+- `path` (nel percorso): il path relativo del file o directory (es. /5000/documenti/testo.txt)
+
+**Corpo:**  
+(nessuno)
+
+**Ritorna:**  
+Metadati del file o directory.
 
-        201 Created on success
-
-        400 Bad Request on failure
-
-DELETE /api/directories/*
-
-Delete an existing directory.
-
-    Example: /api/directories/home/user/oldFolder
-
-    Response:
-
-        200 OK on success
-
-        404 Not Found if directory doesn't exist
-
-Files
-POST /api/files/*
-
-Create a new file.
-
-    Example: /api/files/home/user/newFile.txt
-
-    Response:
-
-        201 Created on success
-
-PUT /api/files/*
-
-Write to a file (overwrite).
-
-    Example: /api/files/home/user/file.txt
-
-    Body: Raw file content
-
-    Response:
-
-        200 OK on success
-
-GET /api/files/*
-
-Read a file.
-
-    Example: /api/files/home/user/file.txt
-
-    Response:
-
-        200 OK with file contents
-
-DELETE /api/files/*
-
-Delete a file.
-
-    Example: /api/files/home/user/file.txt
-
-    Response:
-
-        200 OK on success
-
-        404 Not Found if file doesn't exist
-
-PUT /api/files/* (Rename)
-
-Rename a file.
-
-    Note: This route may conflict with the PUT above (write). Clarify in implementation.
-
-    Body parameters:
-
-        newName (string)
-
-    Response:
-
-        200 OK on success
-
-File Metadata
-PUT /api/mod/*
-
-Modify file attributes (e.g., permissions, timestamps).
-
-    Example: /api/mod/home/user/file.txt
-
-    Body parameters: (depends on your implementation)
-
-    Response:
-
-        200 OK on success
-
-⚠️ Notes
-
-    All routes under /api/files/*, /api/directories/*, and /api/mod/* require the user to be authenticated via middleware (isLoggedIn).
-
-    The route PUT /api/files/* appears to serve both writing and renaming, which may lead to conflict unless method differentiation is handled (e.g., via headers or request body).
+**Tipo di ritorno (JSON):**
+```json
+{
+  "path": "/documenti/testo.txt",
+  "type": 0,
+  "permissions": 420,
+  "owner": 1000,
+  "group": 1000,
+  "atime": 1690963200000,
+  "mtime": 1690963200000,
+  "ctime": 1690963200000,
+  "btime": 1690963200000,
+  "size": 1245
+}
+```
+
+---
+
+## PATCH /api/files/attributes/{*path}
+
+**Descrizione:**  
+Aggiorna uno o più attributi di un file o directory, come permessi (`perm`) o dimensione (`size`).  
+Non è consentito modificare proprietà come `uid` o `gid`.
+
+**Parametri URL:**
+- `path` (nel percorso): il path relativo del file o directory (es. /5000/documenti/testo.txt)
+
+**Corpo (JSON):**
+- `perm`: (opzionale) nuovi permessi in formato ottale (es. 644)
+- `size`: (opzionale) nuova dimensione del file (solo per file)
+- `uid` / `gid`: ignorati, non modificabili
+
+```json
+{
+  "perm": 644,
+  "size": 1000
+}
+```
+
+**Ritorna:**
+Metadati aggiornati del file o directory.
+
+**Tipo di ritorno (JSON):**
+```json
+{
+  "path": "/documenti/testo.txt",
+  "type": 0,
+  "permissions": 420,
+  "owner": 1000,
+  "group": 1000,
+  "atime": 1690963200000,
+  "mtime": 1691505600000,
+  "ctime": 1691505600000,
+  "btime": 1690963200000,
+  "size": 1000
+}
+```
+
+---
+
+## POST /api/login
+
+**Descrizione:**  
+Effettua il login con autenticazione locale (sessione).
+
+**Corpo della richiesta (form-urlencoded o JSON):**
+```json
+{
+  "uid": 5000,
+  "password": "la-tua-password"
+}
+```
+
+**Ritorna:**
+ID utente autenticato.
+
+**Tipo di ritorno (JSON):**
+```json
+5000
+```
+
+---
+
+## POST /api/logout
+
+**Descrizione:**  
+Termina la sessione utente attiva.
+
+**Corpo:**  
+(nessuno)
+
+**Ritorna:**  
+Status `200 OK` senza contenuto.
+
+---
+
+## GET /api/me
+
+**Descrizione:**  
+Ritorna i dati dell’utente attualmente autenticato.
+
+**Corpo:**  
+(nessuno)
+
+**Ritorna:**  
+Dati utente autenticato.
+
+**Tipo di ritorno (JSON):**
+```json
+{
+  "uid": 5000,
+}
+```
+---
