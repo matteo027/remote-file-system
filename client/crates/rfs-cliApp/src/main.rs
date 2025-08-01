@@ -6,7 +6,7 @@ use rfs_fuse::RemoteFS;
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
 struct Cli {
-    #[arg(short, long, default_value = "/home/andrea/mnt/remote")]
+    #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
     mount_point: String,
 
     #[arg(short, long, default_value = "http://localhost:3000")]

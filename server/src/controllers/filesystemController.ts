@@ -190,11 +190,11 @@ export class FileSystemController {
     }
 
     public write = async (req: Request, res: Response) => {
-        const dbPath    = normalizePath(req.params.path);
+        const dbPath = normalizePath(req.params.path);
         const fullFsPath = toFsPath(dbPath);
 
-        const text: Buffer = Buffer.from(req.body.data);
-        const offset: number = req.body.offset ?? 0; // offset passed by the client, default 0      
+        //const text: Buffer = Buffer.from(req.body.data);
+        const offset: number = Number(req.headers['x-chunk-offset'] ?? 0); // offset passed by the client, default 0      
         const user: User = req.user as User;
         if (user === null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
@@ -218,11 +218,36 @@ export class FileSystemController {
 
             await fileRepo.save(file); // update metadata before writing to the file system
 
-            const fh = await fs.open(fullFsPath, "r+");
-            await fh.write(text, 0, text.length, offset);
-            await fh.close();
+            console.log("db updated");
 
-            res.status(200).json({ bytes: text.length });
+            //const fh = await fs.open(fullFsPath, "r+");
+            //await fh.write(text, 0, text.length, offset);
+            //await fh.close();
+
+            const fd = fsSync.openSync(fullFsPath, 'r+'); // or 'w+' to truncate, 'a+' to append
+            const writeStream = fsSync.createWriteStream('', { fd, start: offset, autoClose: true });
+            let bytesWritten = 0;
+            req.on('data', (chunk) => {
+                bytesWritten += chunk.length;
+            });
+
+            req.pipe(writeStream);
+
+            let responded = false; // serve perché potrebbe inviare un 500 error dopo un 200 finish
+            writeStream.on('finish', () => {
+                if (!responded) {
+                    responded = true;
+                    res.status(200).json({ bytes: bytesWritten });
+                }
+            });
+
+            writeStream.on('error', (err) => {
+                if (!responded) {
+                    responded = true;
+                    console.error('Stream error:', err);
+                    res.status(500).json({ error: 'Write error' });
+                }
+            });
         } catch (err: any) {
             console.error('Error writing file:', err);
             if (err.code === 'ENOENT') {
@@ -261,11 +286,8 @@ export class FileSystemController {
             //await fh.read(buffer, 0, Number(size), Number(offset));
             //await fh.close();
 
-            console.log("all right...")
-            const readStream = fsSync.createReadStream(fullFsPath, { start: offset , end: offset+size });
-            console.log("stream made");
+            const readStream = fsSync.createReadStream(fullFsPath, { start: offset , end: offset+size-1 }); // il -1 server perchè end è incluso
             readStream.pipe(res);
-            console.log("pipe sent");
 
             //res.json({ data: buffer.toString("utf-8")}); //offset non serve al ritorno
         } catch (err: any) {
