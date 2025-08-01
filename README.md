@@ -19,8 +19,8 @@ None
 **Response:**
 - List of items contained in the directory (files and folders).
 
-Return type:
-JSON
+**Return type:**
+```json
 [
   {
     "path": "/5000/notes.txt",
@@ -47,6 +47,7 @@ JSON
     "btime": 1399999999999,
   }
 ]
+```
 
 ---
 
@@ -64,8 +65,8 @@ None
 **Response:**
 - Metadata for the requested file or directory.
 
-Return type:
-JSON
+**Return type:**
+```json
 {
   "path": "/5000/notes.txt",
   "owner": 5000,
@@ -78,6 +79,7 @@ JSON
   "ctime": 1699999999999,
   "btime": 1699999999999,
 }
+```
 
 ---
 
