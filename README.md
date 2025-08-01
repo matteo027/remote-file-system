@@ -1,3 +1,322 @@
+# ENGLISH
+
+# FileSystem API
+
+All routes require authentication (middleware "isLoggedIn").
+
+
+## GET /api/directories/{*path}
+
+Description:
+Returns the list of folders and files contained in the directory indicated by the path.
+
+Parameters:
+- path (string): path relative to the remote root (example: "5000/projects").
+
+Request body:
+None
+
+**Response:**
+- List of items contained in the directory (files and folders).
+
+Return type:
+JSON
+[
+  {
+    "path": "/5000/notes.txt",
+    "owner": 5000,
+    "group": 5000,
+    "permissions": 420,
+    "type": 0,
+    "size": 1024,
+    "atime": 1699999999999,
+    "mtime": 1699999999999,
+    "ctime": 1699999999999,
+    "btime": 1699999999999,
+  }
+  {
+    "path": "/5000/dir",
+    "owner": 5000,
+    "group": 5000,
+    "permissions": 420,
+    "type": 1,
+    "size": 1024,
+    "atime": 1399999999999,
+    "ctime": 1399999999999,
+    "ctime": 1399999999999,
+    "btime": 1399999999999,
+  }
+]
+
+---
+
+## GET /api/files/{*path}
+
+Description:
+Returns the metadata of the file or directory specified by the path.
+
+Parameters:
+- path (string): path relative to the remote file or directory.
+
+Request body:
+None
+
+**Response:**
+- Metadata for the requested file or directory.
+
+Return type:
+JSON
+{
+  "path": "/5000/notes.txt",
+  "owner": 5000,
+  "group": 5000,
+  "permissions": 420,
+  "type": 0,
+  "size": 1024,
+  "atime": 1699999999999,
+  "mtime": 1699999999999,
+  "ctime": 1699999999999,
+  "btime": 1699999999999,
+}
+
+---
+
+## POST /api/files/{*path}
+
+**Description:**  
+Updates the metadata of the file or directory indicated by the path.
+
+**Parameters:**  
+- `path` (string): path relative to the remote file or directory.
+
+**Request body:**  
+```json
+{
+  "name": "new_name",          // optional, string
+  "perm": 493                   // optional, integer (permissions)
+}
+```
+
+---
+
+## DELETE /api/files/{*path}
+
+**Description:**  
+Deletes the file or directory specified by the path.
+
+**Parameters:**  
+- `path` (string): relative path of the file or directory to be deleted.
+
+**Response:**  
+Confirmation of deletion.
+
+**Return type:**  
+```json
+{
+  "success": true,
+  "message": "File or directory successfully deleted."
+}
+```
+
+---
+
+## PATCH /api/files/{*path}
+
+**Description:**  
+Renames a file or directory.
+
+**URL parameters:**
+- `path` (string): path of the file/directory to be renamed.
+
+**Request body (JSON):**
+```json
+{
+  "new_path": "/new/path/of/the/file"
+}
+```
+
+**Returns:**
+Updated metadata of the renamed file or directory.
+
+**Return type (JSON):**
+
+```json
+{
+  "path": "/new/path/of/the/file",
+  "owner": 1000,
+  "group": 1000,
+  "permissions": 493,
+  "type": 0,
+  "size": 2048,
+  "atime": 1699999999999,
+  "mtime": 1699999999999,
+  "ctime": 1699999999999,
+  "btime": 1699999999999
+}
+```
+
+---
+
+## PUT /api/files/{*path}
+
+**Description:**
+Writes binary or text content to a file, starting from an offset.
+
+**URL parameters**
+- `path` (in path): relative path
+
+**URL parameters**
+- `path` (in the path): relative path of the file to be written.
+
+**Supported headers**
+- `X-Chunk-Offset` (optional): position (offset in bytes) from which to start writing. Default: 0.
+
+Binary content (stream) of the file to be written.
+
+**Returns:**  
+The number of bytes written successfully.
+
+**Return type**
+```json
+{
+  "bytes": 1024
+}
+```
+
+---
+
+## GET /api/files/attributes/{*path}
+
+**Description:**
+Returns the metadata of a file or directory.
+
+**URL parameters:**
+- `path` (in the path): the relative path of the file or directory (e.g., /5000/documents/text.txt)
+
+**Body:**  
+(none)
+
+**Returns:**  
+File or directory metadata.
+
+**Return type (JSON):**
+```json
+{
+  "path": "/documents/text.txt",
+  "type": 0,
+  "permissions": 420,
+  "owner": 1000,
+  "group": 1000,
+  "atime": 1690963200000,
+  "mtime": 1690963200000,
+  "ctime": 1690963200000,
+  "btime": 1690963200000,
+  "size": 1245
+}
+```
+
+---
+
+## PATCH /api/files/attributes/{*path}
+
+**Description:**  
+Updates one or more attributes of a file or directory, such as permissions (`perm`) or size (`size`).  
+Properties such as `uid` or `gid` cannot be modified.
+
+**URL parameters:**
+- `path` (in path): the relative path of the file or directory (e.g., /5000/documents/text.txt)
+
+**Body (JSON):**
+- `perm`: (optional) new permissions in octal format (e.g., 644)
+- `size`: (optional) new file size (for files only)
+- `uid` / `gid`: ignored, cannot be modified
+
+```json
+{
+  "perm": 644,
+  "size": 1000
+}
+```
+
+**Returns:**
+Updated metadata for the file or directory.
+
+**Return type (JSON):**
+```json
+{
+  "path": "/documents/text.txt",
+  "type": 0,
+  "permissions": 420,
+  "owner": 1000,
+  "group": 1000,
+  "atime": 1690963200000,
+  "mtime": 1691505600000,
+  "ctime": 1691505600000,
+  "btime": 1690963200000,
+  "size": 1000
+}
+```
+
+---
+
+## POST /api/login
+
+**Description:**  
+Log in with local authentication (session).
+
+**Request body (form-urlencoded or JSON):**
+```json
+{
+  "uid": 5000,
+  "password": "your-password"
+}
+```
+
+**Returns:**
+Authenticated user ID.
+
+**Return type (JSON):**
+```json
+5000
+```
+
+---
+
+## POST /api/logout
+
+**Description:**  
+Ends the active user session.
+
+**Body:**  
+(none)
+
+**Returns:**  
+Status `200 OK` without content.
+
+---
+
+## GET /api/me
+
+**Description:**  
+Returns the data of the currently authenticated user.
+
+**Body:**  
+(none)
+
+**Returns:**  
+Authenticated user data.
+
+**Return type (JSON):**
+```json
+{
+  "uid": 5000,
+}
+```
+---
+
+
+# ITALIANO
+
 # API del FileSystem
 
 Tutte le rotte richiedono autenticazione (middleware `isLoggedIn`).
@@ -21,12 +340,29 @@ Lista degli elementi contenuti nella directory (file e cartelle).
 ```json
 [
   {
-    "name": "nome_file_o_cartella",
-    "type": "file" | "directory",
-    "size": 1234,
-    "perm": 493
+    "path": "/5000/notes.txt",
+    "owner": 5000,
+    "group": 5000,
+    "permissions": 420,
+    "type": 0,
+    "size": 1024,
+    "atime": 1699999999999,
+    "mtime": 1699999999999,
+    "ctime": 1699999999999,
+    "btime": 1699999999999
   },
-  ...
+  {
+    "path": "/5000/dir",
+    "owner": 5000,
+    "group": 5000,
+    "permissions": 420,
+    "type": 1,
+    "size": 1024,
+    "atime": 1399999999999,
+    "mtime": 1399999999999,
+    "ctime": 1399999999999,
+    "btime": 1399999999999
+  },
 ]
 ```
 
