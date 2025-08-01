@@ -124,7 +124,7 @@ impl Server {
                     loop {
 
                         let mut username = String::new();
-                        let mut password = String::new();
+                        let password;
                         print!("username: ");
                         io::stdout().flush().unwrap();
                         io::stdin()

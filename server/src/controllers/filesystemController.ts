@@ -218,8 +218,6 @@ export class FileSystemController {
 
             await fileRepo.save(file); // update metadata before writing to the file system
 
-            console.log("db updated");
-
             //const fh = await fs.open(fullFsPath, "r+");
             //await fh.write(text, 0, text.length, offset);
             //await fh.close();
