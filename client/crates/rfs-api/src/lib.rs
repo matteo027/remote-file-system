@@ -5,6 +5,7 @@ use rfs_models::{BackendError, FileEntry, RemoteBackend, SetAttrRequest};
 use rpassword::read_password;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
@@ -224,24 +225,12 @@ impl Server {
         }
     }
 
-    fn request<R: DeserializeOwned + 'static>(&mut self, method: Method, endpoint: &str) -> Result<R, BackendError> {
+    fn request<R: DeserializeOwned + 'static, B: Serialize>(&mut self,method: Method,endpoint: &str,body: Option<&B>) -> Result<R, BackendError> {
         let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
-        let req = self.client.request(method, url);
-        let resp = self.runtime.block_on(async {req.send().await.map_err(|e| BackendError::Other(e.to_string()))})?;
-        match resp.status() {
-            StatusCode::OK => self.runtime.block_on(async { resp.json().await.map_err(|_| BackendError::BadAnswerFormat) }),
-            StatusCode::UNAUTHORIZED => Err(BackendError::Unauthorized),
-            StatusCode::CONFLICT => {
-                let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
-                Err(BackendError::Conflict(err))
-            }
-            _ => Err(BackendError::Other("Unexpected error".into())),
+        let mut req = self.client.request(method, url);
+        if let Some(b) = body {
+            req = req.json(b);
         }
-    }
-
-    fn request_with_body<R: DeserializeOwned + 'static, B: Serialize>(&mut self,method: Method,endpoint: &str,body: &B) -> Result<R, BackendError> {
-        let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
-        let req = self.client.request(method, url).json(body);
         let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
         match resp.status() {
             StatusCode::OK => self.runtime.block_on(async { resp.json().await.map_err(|_| BackendError::BadAnswerFormat) }),
@@ -299,14 +288,14 @@ impl RemoteBackend for Server {
     fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
-        let files: Vec<FileServerResponse> = self.request(Method::GET, &endpoint)?;
+        let files: Vec<FileServerResponse> = self.request::<Vec<FileServerResponse>, ()>(Method::GET, &endpoint, None)?;
         Ok(files.into_iter().map(Self::response_to_entry).collect())
     }
 
     fn create_dir(&mut self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
-        let f: FileServerResponse = self.request(Method::POST, &endpoint)?;
+        let f: FileServerResponse = self.request::<FileServerResponse, ()>(Method::POST, &endpoint, None)?;
         Ok(Self::response_to_entry(f))
     }
 
@@ -320,14 +309,14 @@ impl RemoteBackend for Server {
     fn get_attr(&mut self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
-        let f: FileServerResponse = self.request(Method::GET, &endpoint)?;
+        let f: FileServerResponse = self.request::<FileServerResponse, ()>(Method::GET, &endpoint, None)?;
         Ok(Self::response_to_entry(f))
     }
 
     fn create_file(&mut self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
-        let f: FileServerResponse = self.request(Method::POST, &endpoint)?;
+        let f: FileServerResponse = self.request::<FileServerResponse, ()>(Method::POST, &endpoint, None)?;
         Ok(Self::response_to_entry(f))
     }
 
@@ -369,7 +358,7 @@ impl RemoteBackend for Server {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", old_path.trim_start_matches('/'));
         let body = serde_json::json!({ "new_path": new_path.trim_start_matches('/') });
-        let f: FileServerResponse = self.request_with_body(Method::PATCH, &endpoint, &body)?;
+        let f: FileServerResponse = self.request::<FileServerResponse, Value>(Method::PATCH, &endpoint, Some(&body))?;
         
         Ok(Self::response_to_entry(f))
     }
@@ -378,7 +367,7 @@ impl RemoteBackend for Server {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let body = serde_json::to_value(attrs).map_err(|e| BackendError::Other(e.to_string()))?;
-        let f: FileServerResponse = self.request_with_body(Method::PATCH, &endpoint, &body)?;
+        let f: FileServerResponse = self.request::<FileServerResponse, Value>(Method::PATCH, &endpoint, Some(&body))?;
         
         Ok(Self::response_to_entry(f))
     }
