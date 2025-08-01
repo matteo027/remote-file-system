@@ -91,8 +91,9 @@ async function db() {
       await userRepo.save(admin);
       
       
-      // creating the 5000 (admin) folder
+      // creating the 5000 (admin) folder and the remote-users file
       await fs.mkdir('./file-system/5000', { recursive: true });
+      await fs.writeFile('./file-system/remote-users', '5000\n');
       let now = Date.now();
       const admin_dir = fileRepo.create({
         path: '/5000',
@@ -114,8 +115,19 @@ async function db() {
         ctime: now,
         mtime: now,
       } as File);
+      const users_file = fileRepo.create({
+        path: '/create-user.txt',
+        owner: admin,
+        type: 0,
+        permissions: 0o755,
+        atime: now,
+        btime: now,
+        ctime: now,
+        mtime: now,
+      });
       fileRepo.save(admin_dir);
       fileRepo.save(root_dir);
+      fileRepo.save(users_file);
     }
 
   } catch (error) {

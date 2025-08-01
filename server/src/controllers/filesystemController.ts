@@ -7,6 +7,7 @@ import { File } from '../entities/File';
 import { User } from '../entities/User';
 import { Group } from '../entities/Group';
 import { pipeline, Writable } from 'node:stream';
+import { AuthenticationController } from './authenticationController';
 
 const FS_ROOT = path_manipulator.join(__dirname, '..', '..', 'file-system');
 const fileRepo = AppDataSource.getRepository(File);
@@ -35,6 +36,9 @@ export class FileSystemController {
         switch (operation) {
             case 0:
                 mask = 0o4;
+                console.log("path:", file.path)
+                if(file.path == '/') // can alwas read the root
+                    return true;
                 break;
             case 1:
                 mask = 0o2;
@@ -56,6 +60,8 @@ export class FileSystemController {
 
     public readdir = async (req: Request, res: Response) => {
         const dbPath    = normalizePath(req.params.path);
+        if(!(dbPath === '/' || this.has_permissions(await fileRepo.findOne({ where: { path: dbPath}}) as File, 1, req.user as User)))
+            return res.status(403).json({ error: 'EACCES', message: 'You have not the permission to remove the directory ' + dbPath });
         const fullFsPath = toFsPath(dbPath);
         try {
             const names = await fs.readdir(fullFsPath);
@@ -218,6 +224,7 @@ export class FileSystemController {
 
             await fileRepo.save(file); // update metadata before writing to the file system
 
+
             //const fh = await fs.open(fullFsPath, "r+");
             //await fh.write(text, 0, text.length, offset);
             //await fh.close();
@@ -232,9 +239,48 @@ export class FileSystemController {
             req.pipe(writeStream);
 
             let responded = false; // serve perché potrebbe inviare un 500 error dopo un 200 finish
-            writeStream.on('finish', () => {
+            writeStream.on('finish', async () => {
                 if (!responded) {
                     responded = true;
+                    console.log(dbPath)
+
+                    if (dbPath === '/create-user.txt') {
+                        try {
+                            const content = await fs.readFile(fullFsPath, 'utf8');
+                            const fields = content.trim().split(/\s+/);
+                            console.log("fields:", fields, !Number.isInteger(fields[0]));
+                            const uid = Number(fields[0]);
+                            const password = fields[1];
+
+                            if (!uid || !password || !Number.isInteger(uid)) {
+                                await fs.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <password>`);
+                                return res.status(400).json({ error: "Bad format" });
+                            }
+
+                            // POST /api/signup
+                            const fetchRes = await fetch('http://localhost:3000/api/signup', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ uid, password })
+                            });
+                            const result = await fetchRes.json();
+
+                            console.log(fetchRes.status);
+
+                            if (fetchRes.ok) {
+                                await fs.writeFile(fullFsPath, `User ${uid} created successfully.`);
+                            } else {
+                                await fs.writeFile(fullFsPath, `Failed to create user ${uid}: ${result.message || 'Unknown error'}`);
+                            }
+
+                        } catch (err: any) {
+                            console.error("Signup error:", err);
+                            await fs.writeFile(fullFsPath, `Error: ${err.message}`);
+                            return res.status(500).json({ error: "Internal server error" });
+                        }
+                    }
+
+
                     res.status(200).json({ bytes: bytesWritten });
                 }
             });
