@@ -33,10 +33,17 @@ export class FileSystemController {
 
         let mask = 0;
 
+        if(user.uid == 5000) // admin!
+            return true;
+
+        const slashes = file.path.split('/').length-1;
+        console.log("path:", file.path, "slashes:", slashes);
+        if(operation == 0 && slashes == 1)
+            return true;
+
         switch (operation) {
             case 0:
                 mask = 0o4;
-                console.log("path:", file.path)
                 if(file.path == '/') // can alwas read the root
                     return true;
                 break;
@@ -60,7 +67,7 @@ export class FileSystemController {
 
     public readdir = async (req: Request, res: Response) => {
         const dbPath    = normalizePath(req.params.path);
-        if(!(dbPath === '/' || this.has_permissions(await fileRepo.findOne({ where: { path: dbPath}}) as File, 1, req.user as User)))
+        if(!(dbPath === '/' || this.has_permissions(await fileRepo.findOne({ where: { path: dbPath}, relations: ['owner', 'group'] }) as File, 1, req.user as User)))
             return res.status(403).json({ error: 'EACCES', message: 'You have not the permission to remove the directory ' + dbPath });
         const fullFsPath = toFsPath(dbPath);
         try {
@@ -70,6 +77,7 @@ export class FileSystemController {
                     const childPath = dbPath === '/' ? `/${name}` : `${dbPath}/${name}`;
                     const file: File = await fileRepo.findOne({ where: { path: childPath }, relations: ['owner', 'group'] }) as File;
                     if (!file) {
+                        console.log("not good for", childPath)
                         throw new Error(`Mismatch between the file system and the database for file: ${childPath}`);
                     }
                     const size: number = (await fs.stat(toFsPath(childPath))).size;
@@ -242,13 +250,11 @@ export class FileSystemController {
             writeStream.on('finish', async () => {
                 if (!responded) {
                     responded = true;
-                    console.log(dbPath)
 
                     if (dbPath === '/create-user.txt') {
                         try {
                             const content = await fs.readFile(fullFsPath, 'utf8');
                             const fields = content.trim().split(/\s+/);
-                            console.log("fields:", fields, !Number.isInteger(fields[0]));
                             const uid = Number(fields[0]);
                             const password = fields[1];
 
@@ -263,9 +269,7 @@ export class FileSystemController {
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ uid, password })
                             });
-                            const result = await fetchRes.json();
-
-                            console.log(fetchRes.status);
+                            const result = await fetchRes.json()
 
                             if (fetchRes.ok) {
                                 await fs.writeFile(fullFsPath, `User ${uid} created successfully.`);
@@ -523,7 +527,7 @@ export class FileSystemController {
                 where: { path: dbPath },
                 relations: ['owner', 'group']
             }) as File;
-            if (!this.has_permissions(file, 1, req.user as User))
+            if (!this.has_permissions(file, 0, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to visualize the file ' + dbPath });
             // retreiving file size dinamically
             const size: number = (await fs.stat(toFsPath(dbPath))).size;

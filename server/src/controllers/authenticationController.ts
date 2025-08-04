@@ -48,7 +48,7 @@ export class AuthenticationController {
         await fileRepo.save(userDir);
 
         // clearing the file create-user
-        await fs.writeFile('./file-system/create-user', '');
+        await fs.writeFile('./file-system/create-user.txt', '');
 
         req.login(user, (err) => {
             if (err) return res.status(500).json({ message: "Signup succeeded, but login failed" });
