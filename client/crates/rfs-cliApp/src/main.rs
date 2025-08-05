@@ -1,8 +1,9 @@
 use clap::Parser;
+use daemonize::Daemonize;
 use fuser::{MountOption};
 use rfs_api::Server;
 use rfs_fuse::RemoteFS;
-use std::sync::{Arc, Condvar, Mutex};
+use std::{fs::File, sync::{Arc, Condvar, Mutex}};
 
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
@@ -15,6 +16,22 @@ struct Cli {
 }
 
 fn main() {
+
+    let stdout = File::create("/tmp/remote-fs.out").unwrap();
+    let stderr = File::create("/tmp/remote-fs.err").unwrap();
+
+    let daemonize = Daemonize::new()
+        .pid_file("/tmp/remote-fs.pid") // saves PID
+        .stdout(stdout) // log stdout
+        .stderr(stderr) // log stderr
+        .working_directory("/")
+        .umask(0o027); // file's default permissions
+
+    match daemonize.start() {
+        Ok(_) => eprintln!("Remote-FS daemonizzato"),
+        Err(e) => eprintln!("Errore nel daemonize: {}", e),
+    }
+
     let cli = Cli::parse();
 
     let mount_point = cli.mount_point.clone();
