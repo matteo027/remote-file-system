@@ -1,5 +1,10 @@
 # ENGLISH
 
+# How to run it
+
+Server: `npm run dev`
+Client: `cargo run -- -m /path/to/local/dir`
+
 # FileSystem API
 
 All routes require authentication (middleware "isLoggedIn").
@@ -351,6 +356,11 @@ Translated with DeepL.com (free version)
 ---
 
 # ITALIANO
+
+# Come eseguirlo
+
+Server: `npm run dev`
+Client: `cargo run -- -m /path/to/local/dir`
 
 # API del FileSystem
 
