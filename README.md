@@ -314,8 +314,41 @@ Authenticated user data.
   "uid": 5000,
 }
 ```
----
 
+## GET /api/signup
+
+**Description:**  
+Allows the admin (uid: 5000) to create a new user. The user writes the uid and password of the user to be registered in the `/create-user.txt` file, separated by a space.
+**Request body:**
+```json
+{
+  "uid": 5001,
+  "password": "password"
+}
+```
+
+**Returns:**  
+(none)
+
+## GET /api/group
+
+**Description:**  
+Allows the admin (uid: 5000) to associate a user with a (new) group. The user writes the user's uid and the gid of the group to be associated in the `/create-group.txt` file, separated by a space.
+
+**Request body:**
+```json
+{
+  "uid": 5000,
+  "gid": 6000
+}
+```
+
+**Returns:**  
+(none)
+
+Translated with DeepL.com (free version)
+
+---
 
 # ITALIANO
 
@@ -630,4 +663,37 @@ Dati utente autenticato.
   "uid": 5000,
 }
 ```
+
+## GET /api/signup
+
+**Descrizione:**  
+Consente all'admin (uid: 5000) la creazione di un nuovo utente. L'utente scrive nel file `/create-user.txt` lo uid e la password dell'utente da registrare., spearati da spazio
+
+**Corpo della richiesta:**
+```json
+{
+  "uid": 5001,
+  "password": "password"
+}
+```
+
+**Restituisce:**  
+(niente)
+
+## GET /api/group
+
+**Descrizione:**  
+Consente all'admin (uid: 5000) l'associazione di un utente a un (nuovo) gruppo. L'utente scrive nel file `/create-group.txt` lo uid dell'utente e il gid del gruppo da associare, separati da spazio.
+
+**Corpo della richiesta:**
+```json
+{
+  "uid": 5000,
+  "gid": 6000
+}
+```
+
+**Restituisce:**  
+(niente)
+
 ---
