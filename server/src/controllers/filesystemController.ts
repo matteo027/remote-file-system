@@ -37,7 +37,6 @@ export class FileSystemController {
             return true;
 
         const slashes = file.path.split('/').length-1;
-        console.log("path:", file.path, "slashes:", slashes);
         if(operation == 0 && slashes == 1)
             return true;
 

@@ -102,21 +102,17 @@ export class AuthenticationController {
         if (!group) {
             group = groupRepo.create({ gid, users: [] });
         }
-        console.log("group found:", group);
         if (!Array.isArray(group.users)) {
             group.users = [];
         }
         const alreadyInGroup = group.users.some(u => u.uid === user.uid);
-        console.log("aig?", alreadyInGroup)
         if (!alreadyInGroup) {
             group.users.push(user);
         }
         await groupRepo.save(group);
-        console.log("group saved")
 
         user.group = group;
         await userRepo.save(user);
-        console.log("user saved")
 
         // clearing the file create-group
         await fs.writeFile('./file-system/create-group.txt', '');
