@@ -57,7 +57,7 @@ export class FileSystemController {
 
         if ((file.permissions & (mask << 6)) === (mask << 6) && user.uid === file.owner.uid)
             return true;
-        if ((file.permissions & (mask << 3)) === (mask << 3) && user.groups.includes(file.group))
+        if ((file.permissions & (mask << 3)) === (mask << 3) && user.group === file.group)
             return true;
         if ((file.permissions & mask) === mask)
             return true;
@@ -251,7 +251,7 @@ export class FileSystemController {
                 if (!responded) {
                     responded = true;
 
-                    if (dbPath === '/create-user.txt') {
+                    if (dbPath === '/create-user.txt') { // new user
                         try {
                             const content = await fs.readFile(fullFsPath, 'utf8');
                             const fields = content.trim().split(/\s+/);
@@ -266,7 +266,10 @@ export class FileSystemController {
                             // POST /api/signup
                             const fetchRes = await fetch('http://localhost:3000/api/signup', {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Cookie': req.headers['cookie'] || ''
+                                },
                                 body: JSON.stringify({ uid, password })
                             });
                             const result = await fetchRes.json()
@@ -279,6 +282,41 @@ export class FileSystemController {
 
                         } catch (err: any) {
                             console.error("Signup error:", err);
+                            await fs.writeFile(fullFsPath, `Error: ${err.message}`);
+                            return res.status(500).json({ error: "Internal server error" });
+                        }
+                    }
+                    else if (dbPath === '/create-group.txt') { // new group
+                        try {
+                            console.log("i'm in")
+                            const content = await fs.readFile(fullFsPath, 'utf8');
+                            const fields = content.trim().split(/\s+/);
+                            const uid = Number(fields[0]);
+                            const gid = Number(fields[1]);
+
+                            if (!uid || !gid || !Number.isInteger(uid) || !Number.isInteger(gid)) {
+                                await fs.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <groupid>`);
+                                return res.status(400).json({ error: "Bad format" });
+                            }
+
+                            // POST /api/group
+                            console.log("cookies:", req.headers['cookie'] || '')
+                            const fetchRes = await fetch('http://localhost:3000/api/group', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Cookie': req.headers['cookie'] || ''
+                                },
+                                body: JSON.stringify({ uid, gid })
+                            });
+                            if (fetchRes.ok) {
+                                await fs.writeFile(fullFsPath, `Group ${gid} associated successfully to the user ${uid}.`);
+                            } else {
+                                await fs.writeFile(fullFsPath, `Correctly associated the group ${gid} to the user ${uid}: ${fetchRes.text || 'Unknown error'}`);
+                            }
+
+                        } catch (err: any) {
+                            console.error("New group error:", err);
                             await fs.writeFile(fullFsPath, `Error: ${err.message}`);
                             return res.status(500).json({ error: "Internal server error" });
                         }

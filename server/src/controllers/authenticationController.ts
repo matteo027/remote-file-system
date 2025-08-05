@@ -5,6 +5,7 @@ import { User } from '../entities/User';
 import { AppDataSource } from '../data-source';
 import { promises as fs } from 'node:fs';
 import { File } from '../entities/File';
+import { Group } from '../entities/Group';
 
 const scryptAsync = promisify(crypto.scrypt);
 
@@ -50,10 +51,7 @@ export class AuthenticationController {
         // clearing the file create-user
         await fs.writeFile('./file-system/create-user.txt', '');
 
-        req.login(user, (err) => {
-            if (err) return res.status(500).json({ message: "Signup succeeded, but login failed" });
-            return res.status(201).json({ uid });
-        });
+        return res.status(200).end();
     }
     // logout
     public logout = async (req: Request, res: Response) => {
@@ -88,5 +86,42 @@ export class AuthenticationController {
         return res.status(401).json({ message: "not authenticated" });
     }
 
+    // new group
+    
+    public newgroup = async (req: Request, res: Response) => {
+        const { uid, gid } = req.body;
+        const userRepo = AppDataSource.getRepository(User);
+        const groupRepo = AppDataSource.getRepository(Group);
+
+        const user = await userRepo.findOne({ where: { uid } });
+        if (!user) {
+            return res.status(404).json({ message: "User does not exist" });
+        }
+
+        let group = await groupRepo.findOne({ where: { gid } });
+        if (!group) {
+            group = groupRepo.create({ gid, users: [] });
+        }
+        console.log("group found:", group);
+        if (!Array.isArray(group.users)) {
+            group.users = [];
+        }
+        const alreadyInGroup = group.users.some(u => u.uid === user.uid);
+        console.log("aig?", alreadyInGroup)
+        if (!alreadyInGroup) {
+            group.users.push(user);
+        }
+        await groupRepo.save(group);
+        console.log("group saved")
+
+        user.group = group;
+        await userRepo.save(user);
+        console.log("user saved")
+
+        // clearing the file create-group
+        await fs.writeFile('./file-system/create-group.txt', '');
+
+        return res.status(200).end();
+    }
 
 }

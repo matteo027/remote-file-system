@@ -1,4 +1,4 @@
-import { Entity, Column, PrimaryColumn, OneToMany, ManyToMany } from "typeorm";
+import { Entity, Column, PrimaryColumn, OneToMany, ManyToOne } from "typeorm";
 import { File } from "./File";
 import { Group } from "./Group";
 
@@ -16,6 +16,6 @@ export class User {
   @OneToMany(() => File, (file) => file.owner)
   files: File[];
 
-  @ManyToMany(() => Group, (group) => group.users)
-  groups: Group[];
+  @ManyToOne(() => Group, (group) => group.users)
+  group: Group;
 }
