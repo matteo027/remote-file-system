@@ -1,9 +1,10 @@
 use clap::Parser;
 use daemonize::Daemonize;
 use fuser::{MountOption};
-use rfs_api::Server;
 use rfs_fuse::RemoteFS;
 use std::{fs::File, sync::{Arc, Condvar, Mutex}};
+use rfs_api::HttpBackend;
+use rfs_cache::Cache;
 
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
@@ -26,7 +27,7 @@ fn main() {
         .stderr(stderr) // log stderr
         .working_directory("/")
         .umask(0o027); // file's default permissions
-
+    
     match daemonize.start() {
         Ok(_) => eprintln!("Remote-FS daemonizzato"),
         Err(e) => eprintln!("Errore nel daemonize: {}", e),
@@ -34,16 +35,16 @@ fn main() {
 
     let cli = Cli::parse();
 
-    let mount_point = cli.mount_point.clone();
     let options = vec![
         MountOption::FSName("Remote-FS".to_string()),
         MountOption::RW,
     ];
 
-    let fs = RemoteFS::new(Server::new());
-
-    let session = fuser::spawn_mount2(fs, &mount_point, &options)
-        .expect("Failed to mount FUSE");
+    let http_backend = HttpBackend::new();
+    let cache = Cache::new(http_backend, 100, 100, 50); // Capacità di cache per attributi, directory e chunk di file
+    let fs = RemoteFS::new(cache);
+    let session = fuser::spawn_mount2(fs, &cli.mount_point, &options)
+        .expect("failed to mount");
 
     let pair = Arc::new((Mutex::new(false), Condvar::new()));
     let pair_clone = pair.clone();
@@ -68,4 +69,10 @@ fn main() {
 
     drop(session);
     eprintln!("Remote-FS unmounted correctly");
+    eprintln!("Remote-FS mounted at {}", cli.mount_point);
+    eprintln!("Remote address: {}", cli.remote_address);
+
+    
+    eprintln!("Remote-FS unmounted");
+    return;
 }

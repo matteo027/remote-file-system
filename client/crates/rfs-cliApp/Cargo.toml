@@ -9,5 +9,6 @@ ctrlc = "3.4.7"
 daemonize = "0.5.0"
 fuser = "0.15.1"
 rfs-api = { version = "0.1.0", path = "../rfs-api" }
+rfs-cache = { version = "0.1.0", path = "../rfs-cache" }
 rfs-fuse = { version = "0.1.0", path = "../rfs-fuse" }
 rfs-models = { version = "0.1.0", path = "../rfs-models" }

@@ -55,7 +55,7 @@ struct FileServerResponse {
     btime: SystemTime, 
 }
 
-pub struct Server {
+pub struct HttpBackend {
     runtime: Runtime, // from tokio, used to manage async calls
     base_url: Url,
     client: Client,
@@ -70,7 +70,7 @@ where
     Ok(UNIX_EPOCH + Duration::from_millis(millis))
 }
 
-impl Server {
+impl HttpBackend {
     pub fn new() -> Self {
         let cookie_jar = Arc::new(Jar::default());
         let client = reqwest::Client::builder()
@@ -85,7 +85,7 @@ impl Server {
         }
     }
 
-    fn check_and_authenticate(&mut self) -> Result<(), BackendError> {
+    fn check_and_authenticate(&self) -> Result<(), BackendError> {
         let client = self.client.clone();
         let address = self.base_url.clone();
         let cookie_jar = self.cookie_jar.clone();
@@ -95,7 +95,7 @@ impl Server {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("Unable to geenrate e tokio Runtime");
+                .expect("Unable to generate tokio Runtime");
 
             rt.block_on(async move {
 
@@ -210,7 +210,7 @@ impl Server {
         }
     }
 
-    fn request_no_response(&mut self, method: Method, endpoint: &str) -> Result<(), BackendError> {
+    fn request_no_response(&self, method: Method, endpoint: &str) -> Result<(), BackendError> {
         let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req = self.client.request(method, url);
         let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
@@ -225,7 +225,7 @@ impl Server {
         }
     }
 
-    fn request<R: DeserializeOwned + 'static, B: Serialize>(&mut self,method: Method,endpoint: &str,body: Option<&B>) -> Result<R, BackendError> {
+    fn request<R: DeserializeOwned + 'static, B: Serialize>(&self,method: Method,endpoint: &str,body: Option<&B>) -> Result<R, BackendError> {
         let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let mut req = self.client.request(method, url);
         if let Some(b) = body {
@@ -243,7 +243,7 @@ impl Server {
         }
     }
 
-    fn request_stream_get(&mut self, method: Method, endpoint: &str) -> Result<Pin<Box<dyn Stream<Item = Result<bytes::Bytes, BackendError>> + Send>>, BackendError> {
+    fn request_stream_get(&self, method: Method, endpoint: &str) -> Result<Pin<Box<dyn Stream<Item = Result<bytes::Bytes, BackendError>> + Send>>, BackendError> {
         let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req = self.client.request(method, url);
         let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
@@ -259,7 +259,7 @@ impl Server {
         }
     }
 
-     fn request_stream_send<R: DeserializeOwned + 'static, S: Stream<Item = Result<Bytes, BackendError>> + Send + 'static,>(&mut self, method: Method, endpoint: &str, offset: u64, stream: S) -> Result<R, BackendError> {
+     fn request_stream_send<R: DeserializeOwned + 'static, S: Stream<Item = Result<Bytes, BackendError>> + Send + 'static,>(&self, method: Method, endpoint: &str, offset: u64, stream: S) -> Result<R, BackendError> {
         let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req = self.client.request(method, url)
             .header("X-Chunk-Offset", offset.to_string()) // non posso mettere offset nel body in quanto è occupato dallo stream di byte
@@ -284,50 +284,50 @@ impl Server {
 
 }
 
-impl RemoteBackend for Server {
-    fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
+impl RemoteBackend for HttpBackend {
+    fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let files: Vec<FileServerResponse> = self.request::<Vec<FileServerResponse>, ()>(Method::GET, &endpoint, None)?;
         Ok(files.into_iter().map(Self::response_to_entry).collect())
     }
 
-    fn create_dir(&mut self, path: &str) -> Result<FileEntry, BackendError> {
+    fn create_dir(&self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request::<FileServerResponse, ()>(Method::POST, &endpoint, None)?;
         Ok(Self::response_to_entry(f))
     }
 
-    fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
+    fn delete_dir(&self, path: &str) -> Result<(), BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         self.request_no_response(Method::DELETE, &endpoint)?;
         Ok(())
     }
 
-    fn get_attr(&mut self, path: &str) -> Result<FileEntry, BackendError> {
+    fn get_attr(&self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request::<FileServerResponse, ()>(Method::GET, &endpoint, None)?;
         Ok(Self::response_to_entry(f))
     }
 
-    fn create_file(&mut self, path: &str) -> Result<FileEntry, BackendError> {
+    fn create_file(&self, path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request::<FileServerResponse, ()>(Method::POST, &endpoint, None)?;
         Ok(Self::response_to_entry(f))
     }
 
-    fn delete_file(&mut self, path: &str) -> Result<(), BackendError> {
+    fn delete_file(&self, path: &str) -> Result<(), BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         self.request_no_response(Method::DELETE, &endpoint)?;
         Ok(())
     }
 
-    fn read_chunk(&mut self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
+    fn read_chunk(&self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
         self.check_and_authenticate()?;
         
         let endpoint = format!("api/files/{}?offset={}&size={}", path.trim_start_matches('/'), offset, size);
@@ -344,7 +344,7 @@ impl RemoteBackend for Server {
         Ok(data)
     }
 
-    fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
+    fn write_chunk(&self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         let data_stream = stream::once(async move { Ok(Bytes::from(data)) });
@@ -354,7 +354,7 @@ impl RemoteBackend for Server {
         Ok(resp.bytes)
     }
 
-    fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
+    fn rename(&self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/{}", old_path.trim_start_matches('/'));
         let body = serde_json::json!({ "new_path": new_path.trim_start_matches('/') });
@@ -363,7 +363,7 @@ impl RemoteBackend for Server {
         Ok(Self::response_to_entry(f))
     }
 
-    fn set_attr(&mut self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
+    fn set_attr(&self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
         self.check_and_authenticate()?;
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let body = serde_json::to_value(attrs).map_err(|e| BackendError::Other(e.to_string()))?;
