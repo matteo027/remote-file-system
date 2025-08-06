@@ -5,6 +5,8 @@ use rfs_fuse::RemoteFS;
 use std::{fs::File, sync::{Arc, Condvar, Mutex}};
 use rfs_api::HttpBackend;
 use rfs_cache::Cache;
+use signal_hook::{consts::signal::*, iterator::Signals};
+use std::thread;
 
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
@@ -30,7 +32,7 @@ fn main() {
     
     match daemonize.start() {
         Ok(_) => eprintln!("Remote-FS daemonizzato"),
-        Err(e) => eprintln!("Errore nel daemonize: {}", e),
+        Err(e) => eprintln!("Error in daemonize: {}", e),
     }
 
     let cli = Cli::parse();
@@ -49,15 +51,23 @@ fn main() {
     let pair = Arc::new((Mutex::new(false), Condvar::new()));
     let pair_clone = pair.clone();
 
-    // Ctrl+C
-    ctrlc::set_handler(move || {
-        let (lock, cvar) = &*pair_clone;
-        let mut stop = lock.lock().unwrap();
-        *stop = true;
-        cvar.notify_one();
-        eprintln!("\nSignal received. Unmounting...");
-    })
-    .expect("Errore nel set_handler");
+    let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT, SIGHUP]).expect("Unable to create signals to listen to");
+    thread::spawn(move || {
+        for signal in signals.forever() {
+            match signal {
+                SIGINT | SIGTERM | SIGQUIT | SIGHUP => {
+                    let (lock, cvar) = &*pair_clone;
+                    let mut stop = lock.lock().unwrap();
+                    *stop = true;
+                    cvar.notify_one();
+                    eprintln!("\nSignal received. Unmounting...");
+                },
+                other => {
+                    eprintln!("Signal not hanlded: {}", other);
+                }
+            }
+        }
+    });
 
     eprintln!("Remote-FS mounted on {}", cli.mount_point);
     eprintln!("Remote address: {}", cli.remote_address);

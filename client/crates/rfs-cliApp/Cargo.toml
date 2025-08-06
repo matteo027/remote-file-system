@@ -12,3 +12,4 @@ rfs-api = { version = "0.1.0", path = "../rfs-api" }
 rfs-cache = { version = "0.1.0", path = "../rfs-cache" }
 rfs-fuse = { version = "0.1.0", path = "../rfs-fuse" }
 rfs-models = { version = "0.1.0", path = "../rfs-models" }
+signal-hook = "0.3.18"
