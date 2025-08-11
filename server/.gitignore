@@ -1,3 +1,4 @@
 node_modules/
 metadata.sqlite
 file-system/
+dist/
