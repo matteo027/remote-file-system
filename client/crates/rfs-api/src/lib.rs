@@ -71,22 +71,110 @@ where
 }
 
 impl HttpBackend {
-    pub fn new() -> Self {
+    pub fn new(address: String, do_login: bool) -> Result<Self, BackendError> {
         let cookie_jar = Arc::new(Jar::default());
         let client = reqwest::Client::builder()
             .cookie_provider(cookie_jar.clone())
             .build()
             .expect("Unable to build the Client object");
-        Self {
+
+
+
+        let httpb = Self {
             runtime: Runtime::new().expect("Unable to built a Runtime object"),
-            base_url: Url::from_str("http://localhost:3000/").unwrap(), // meglio passarlo come parametro la metodo (?)
+            base_url: Url::from_str(&address).unwrap(),
             client,
             cookie_jar
+        };
+
+        if do_login {
+            // checking if current cookies are valid
+            if let Err(_) = httpb.load_cookies() {
+                httpb.authenticate()?;
+            }
+        } else {
+            httpb.load_cookies()?;
         }
+
+        Ok(httpb)
     }
 
-    fn check_and_authenticate(&self) -> Result<(), BackendError> {
+    fn authenticate(&self) -> Result<(), BackendError> {
         let client = self.client.clone();
+        let address = self.base_url.clone();
+
+        // Spawn a new OS thread to handle the async login workflow
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Unable to generate tokio Runtime");
+
+            rt.block_on(async move {
+                loop {
+                    let mut username = String::new();
+                    let password;
+                    eprint!("username: ");
+                    io::stdout().flush().unwrap();
+                    io::stdin()
+                        .read_line(&mut username)
+                        .expect("Failed to read the username");
+                    username = username.trim().to_string(); // removing the final endl
+                    eprint!("password: ");
+                    io::stdout().flush().unwrap();
+                    password = read_password().unwrap_or_else(|_| {
+                        eprintln!("\n[auth] Failed to read password");
+                        String::new()
+                    });
+                    let login_url = address.join("api/login").unwrap();
+                    let body = LoginPayload {
+                        username: username,
+                        password: password,
+                    };
+                    let resp_login = client
+                        .post(login_url.clone())
+                        .json(&body)
+                        .send()
+                        .await
+                        .map_err(|e| BackendError::Other(e.to_string()))?;
+
+                    eprintln!("[auth] login status: {:?}", resp_login.status());
+                    for cookie in resp_login.cookies() {
+                        eprintln!("[auth] cookie: {}={}", cookie.name(), cookie.value());
+                        fs::create_dir_all("/tmp").expect("Unbale to create /tmp");
+                        fs::write("/tmp/rfs-token", cookie.value()).expect("Unbale to create /tmp/rfs-token");
+                    }
+
+                    if resp_login.status() == StatusCode::OK {
+                        // verify with /api/me again
+                        let me_url = address.join("api/me").unwrap();
+                        let verify = client
+                            .get(me_url.clone())
+                            .send()
+                            .await
+                            .map_err(|e| BackendError::Other(e.to_string()))?;
+                        eprintln!("verify status: {}", verify.status());
+                        for cookie in resp_login.cookies() {
+                            eprintln!("[veri] cookie: {}={}", cookie.name(), cookie.value());
+                        }
+                        if verify.status() == StatusCode::OK {
+                            return Ok(());
+                        } else if verify.status() != StatusCode::UNAUTHORIZED {
+                            return Err(BackendError::Other(String::from(verify.status().as_str())));
+                        }
+                    } 
+                    
+                }
+            })
+        });
+
+        // Wait for authentication thread to finish before proceeding
+        handle
+            .join()
+            .unwrap_or_else(|e| Err(BackendError::Other(format!("Thread join failure: {:?}", e))))
+    }
+
+    fn load_cookies(&self) -> Result<(), BackendError> {
         let address = self.base_url.clone();
         let cookie_jar = self.cookie_jar.clone();
 
@@ -99,89 +187,18 @@ impl HttpBackend {
 
             rt.block_on(async move {
 
-
                 // trying to read from /temp/rfs-token
                 if let Ok(token) = fs::read_to_string("/tmp/rfs-token") {
                     let cookie_str = format!("connect.sid={}", token.trim());
                     cookie_jar.add_cookie_str(&cookie_str, &address);
-                }
-
-                // Step 1: check /api/me
-                let me_url = address.join("api/me").unwrap();
-                let resp = client
-                    .get(me_url.clone())
-                    .send()
-                    .await
-
-                    .map_err(|e| BackendError::Other(e.to_string()))?;
-
-                if resp.status() == StatusCode::OK {
                     return Ok(());
                 }
 
-                if resp.status() == StatusCode::UNAUTHORIZED {
-                    // Step 2: login
-                    loop {
-
-                        let mut username = String::new();
-                        let password;
-                        print!("username: ");
-                        io::stdout().flush().unwrap();
-                        io::stdin()
-                            .read_line(&mut username)
-                            .expect("Failed to read the username");
-                        username = username.trim().to_string(); // removing the final endl
-                        print!("password: ");
-                        io::stdout().flush().unwrap();
-                        password = read_password().unwrap_or_else(|_| {
-                            println!("\n[auth] Failed to read password");
-                            String::new()
-                        });
-                        let login_url = address.join("api/login").unwrap();
-                        let body = LoginPayload {
-                            username: username,
-                            password: password,
-                        };
-                        let resp_login = client
-                            .post(login_url.clone())
-                            .json(&body)
-                            .send()
-                            .await
-                            .map_err(|e| BackendError::Other(e.to_string()))?;
-
-                        println!("[auth] login status: {:?}", resp_login.status());
-                        for cookie in resp_login.cookies() {
-                            println!("[auth] cookie: {}={}", cookie.name(), cookie.value());
-                            fs::create_dir_all("/tmp").expect("Unbale to create /tmp");
-                            fs::write("/tmp/rfs-token", cookie.value()).expect("Unbale to create /tmp/rfs-token");
-                        }
-
-                        if resp_login.status() == StatusCode::OK {
-                            // Step 3: optionally verify with /api/me again
-                            let verify = client
-                                .get(me_url.clone())
-                                .send()
-                                .await
-                                .map_err(|e| BackendError::Other(e.to_string()))?;
-                            println!("verify status: {}", verify.status());
-                            for cookie in resp_login.cookies() {
-                                println!("[veri] cookie: {}={}", cookie.name(), cookie.value());
-                            }
-                            if verify.status() == StatusCode::OK {
-                                return Ok(());
-                            }
-                        } 
-                    }
-                }
-
-                Err(BackendError::Other(format!(
-                    "Unexpected status: {}",
-                    resp.status()
-                )))
+                Err(BackendError::Unauthorized)
             })
         });
 
-        // Wait for authentication thread to finish before proceeding
+        // Wait for cookie-loading thread to finish before proceeding
         handle
             .join()
             .unwrap_or_else(|e| Err(BackendError::Other(format!("Thread join failure: {:?}", e))))
@@ -286,49 +303,49 @@ impl HttpBackend {
 
 impl RemoteBackend for HttpBackend {
     fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
-        self.check_and_authenticate()?;
+        
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let files: Vec<FileServerResponse> = self.request::<Vec<FileServerResponse>, ()>(Method::GET, &endpoint, None)?;
         Ok(files.into_iter().map(Self::response_to_entry).collect())
     }
 
     fn create_dir(&self, path: &str) -> Result<FileEntry, BackendError> {
-        self.check_and_authenticate()?;
+        
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request::<FileServerResponse, ()>(Method::POST, &endpoint, None)?;
         Ok(Self::response_to_entry(f))
     }
 
     fn delete_dir(&self, path: &str) -> Result<(), BackendError> {
-        self.check_and_authenticate()?;
+        
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         self.request_no_response(Method::DELETE, &endpoint)?;
         Ok(())
     }
 
     fn get_attr(&self, path: &str) -> Result<FileEntry, BackendError> {
-        self.check_and_authenticate()?;
+        
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request::<FileServerResponse, ()>(Method::GET, &endpoint, None)?;
         Ok(Self::response_to_entry(f))
     }
 
     fn create_file(&self, path: &str) -> Result<FileEntry, BackendError> {
-        self.check_and_authenticate()?;
+        
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request::<FileServerResponse, ()>(Method::POST, &endpoint, None)?;
         Ok(Self::response_to_entry(f))
     }
 
     fn delete_file(&self, path: &str) -> Result<(), BackendError> {
-        self.check_and_authenticate()?;
+        
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         self.request_no_response(Method::DELETE, &endpoint)?;
         Ok(())
     }
 
     fn read_chunk(&self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
-        self.check_and_authenticate()?;
+        
         
         let endpoint = format!("api/files/{}?offset={}&size={}", path.trim_start_matches('/'), offset, size);
         let mut stream = self.request_stream_get(Method::GET, &endpoint)?;
@@ -345,7 +362,7 @@ impl RemoteBackend for HttpBackend {
     }
 
     fn write_chunk(&self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
-        self.check_and_authenticate()?;
+        
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         let data_stream = stream::once(async move { Ok(Bytes::from(data)) });
 
@@ -355,7 +372,7 @@ impl RemoteBackend for HttpBackend {
     }
 
     fn rename(&self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
-        self.check_and_authenticate()?;
+        
         let endpoint = format!("api/files/{}", old_path.trim_start_matches('/'));
         let body = serde_json::json!({ "new_path": new_path.trim_start_matches('/') });
         let f: FileServerResponse = self.request::<FileServerResponse, Value>(Method::PATCH, &endpoint, Some(&body))?;
@@ -364,7 +381,7 @@ impl RemoteBackend for HttpBackend {
     }
 
     fn set_attr(&self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
-        self.check_and_authenticate()?;
+        
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let body = serde_json::to_value(attrs).map_err(|e| BackendError::Other(e.to_string()))?;
         let f: FileServerResponse = self.request::<FileServerResponse, Value>(Method::PATCH, &endpoint, Some(&body))?;

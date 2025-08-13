@@ -14,7 +14,7 @@ struct Cli {
     #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
     mount_point: String,
 
-    #[arg(short, long, default_value = "http://localhost:3000")]
+    #[arg(short, long, default_value = "https://educational-shannen-politecnico-di-torino-b6588608.koyeb.app")]
     remote_address: String,
 }
 
@@ -30,19 +30,37 @@ fn main() {
         .working_directory("/")
         .umask(0o027); // file's default permissions
     
-    match daemonize.start() {
-        Ok(_) => eprintln!("Remote-FS daemonizzato"),
-        Err(e) => eprintln!("Error in daemonize: {}", e),
-    }
+    
 
     let cli = Cli::parse();
+    // authentication (actually saving cookies)
+    if let Err(e) = HttpBackend::new(cli.remote_address.clone(), true) {
+        eprintln!("Unable to get the authhenticate: {}", e);
+        std::process::exit(1);
+    }
+
+    match daemonize.start() {
+        Ok(_) => {},
+        Err(e) => {
+          eprintln!("Error in daemonize: {}", e);
+          std::process::exit(1);
+        }
+    }
 
     let options = vec![
         MountOption::FSName("Remote-FS".to_string()),
         MountOption::RW,
     ];
 
-    let http_backend = HttpBackend::new();
+    // real backend: reads previously saved cookies
+    let http_backend;
+    match HttpBackend::new(cli.remote_address.clone(), false) {
+        Ok(be) => http_backend = be,
+        Err(_) => {
+            eprintln!("Unable to get the cookies from /tmp/rfs-token");
+            std::process::exit(1);
+        }
+    }
     let cache = Cache::new(http_backend, 100, 100, 50); // Capacità di cache per attributi, directory e chunk di file
     let fs = RemoteFS::new(cache);
     let session = fuser::spawn_mount2(fs, &cli.mount_point, &options)
@@ -74,15 +92,13 @@ fn main() {
 
     // waits for the signal
     let (lock, cvar) = &*pair;
-    let mut stop = lock.lock().unwrap();
-    stop = cvar.wait_while(stop, |s|{!*s}).expect("Mutex poisoned");
+    let stop = lock.lock().unwrap();
+    let _unused = cvar.wait_while(stop, |s|{!*s}).expect("Mutex poisoned");
 
     drop(session);
     eprintln!("Remote-FS unmounted correctly");
     eprintln!("Remote-FS mounted at {}", cli.mount_point);
     eprintln!("Remote address: {}", cli.remote_address);
 
-    
-    eprintln!("Remote-FS unmounted");
     return;
 }
