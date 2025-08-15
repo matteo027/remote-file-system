@@ -1122,12 +1122,22 @@ dependencies = [
  "rfs-api",
  "rfs-cache",
  "rfs-fuse",
+ "rfs-fuse-macos",
  "rfs-models",
  "signal-hook",
 ]
 
 [[package]]
 name = "rfs-fuse"
+version = "0.1.0"
+dependencies = [
+ "fuser",
+ "libc",
+ "rfs-models",
+]
+
+[[package]]
+name = "rfs-fuse-macos"
 version = "0.1.0"
 dependencies = [
  "fuser",

@@ -2,6 +2,7 @@ use clap::Parser;
 use daemonize::Daemonize;
 use fuser::{MountOption};
 use rfs_fuse::RemoteFS;
+use rfs_fuse_macos::RemoteFS as RemoteFSMacOS;
 use std::{fs::File, sync::{Arc, Condvar, Mutex}};
 use rfs_api::HttpBackend;
 use rfs_cache::Cache;
@@ -11,7 +12,7 @@ use std::thread;
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
 struct Cli {
-    #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
+    #[arg(short, long, default_value = "/Users/matteo/mnt/remote")]
     mount_point: String,
 
     #[arg(short, long, default_value = "https://educational-shannen-politecnico-di-torino-b6588608.koyeb.app")]
@@ -20,18 +21,6 @@ struct Cli {
 
 fn main() {
 
-    let stdout = File::create("/tmp/remote-fs.out").unwrap();
-    let stderr = File::create("/tmp/remote-fs.err").unwrap();
-
-    let daemonize = Daemonize::new()
-        .pid_file("/tmp/remote-fs.pid") // saves PID
-        .stdout(stdout) // log stdout
-        .stderr(stderr) // log stderr
-        .working_directory("/")
-        .umask(0o027); // file's default permissions
-    
-    
-
     let cli = Cli::parse();
     // authentication (actually saving cookies)
     if let Err(e) = HttpBackend::new(cli.remote_address.clone(), true) {
@@ -39,17 +28,29 @@ fn main() {
         std::process::exit(1);
     }
 
-    match daemonize.start() {
-        Ok(_) => {},
-        Err(e) => {
-          eprintln!("Error in daemonize: {}", e);
-          std::process::exit(1);
+    #[cfg(target_os = "linux")]
+    {
+        let stdout = File::create("/tmp/remote-fs.out").unwrap();
+        let stderr = File::create("/tmp/remote-fs.err").unwrap();
+        let daemonize = Daemonize::new()
+            .pid_file("/tmp/remote-fs.pid") // saves PID
+            .stdout(stdout) // log stdout
+            .stderr(stderr) // log stderr
+            .working_directory("/")
+            .umask(0o027); // file's default permissions
+        match daemonize.start() {
+            Ok(_) => {},
+            Err(e) => {
+            eprintln!("Error in daemonize: {}", e);
+            std::process::exit(1);
+            }
         }
     }
 
     let options = vec![
         MountOption::FSName("Remote-FS".to_string()),
         MountOption::RW,
+        MountOption::AllowOther, // <--- aggiungi questa
     ];
 
     // real backend: reads previously saved cookies
@@ -62,7 +63,16 @@ fn main() {
         }
     }
     let cache = Cache::new(http_backend, 100, 100, 50); // Capacità di cache per attributi, directory e chunk di file
-    let fs = RemoteFS::new(cache);
+    let fs;
+    #[cfg(target_os = "linux")]
+    {
+        fs = RemoteFSM::new(cache);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        fs = RemoteFSMacOS::new(cache);
+    }
+     
     let session = fuser::spawn_mount2(fs, &cli.mount_point, &options)
         .expect("failed to mount");
 
@@ -92,8 +102,8 @@ fn main() {
 
     // waits for the signal
     let (lock, cvar) = &*pair;
-    let stop = lock.lock().unwrap();
-    let _unused = cvar.wait_while(stop, |s|{!*s}).expect("Mutex poisoned");
+    let mut stop = lock.lock().unwrap();
+    stop = cvar.wait_while(stop, |s|{!*s}).expect("Mutex poisoned");
 
     drop(session);
     eprintln!("Remote-FS unmounted correctly");
