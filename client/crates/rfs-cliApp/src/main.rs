@@ -66,7 +66,7 @@ fn main() {
     let fs;
     #[cfg(target_os = "linux")]
     {
-        fs = RemoteFSM::new(cache);
+        fs = RemoteFS::new(cache);
     }
     #[cfg(target_os = "macos")]
     {
