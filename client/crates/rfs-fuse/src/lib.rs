@@ -258,8 +258,30 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
 
     fn read(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,size: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyData,) {
         if let Some(path) = self.inode_to_path(ino) {
-            match self.backend.read_chunk(path.to_str().unwrap(), offset as u64, size as u64) {
-                Ok(data) => reply.data(&data),
+            let file_sz = match self.backend.get_attr(path.to_str().unwrap()) {
+                Ok(entry) => entry.size as u64,
+                Err(e) => {
+                    reply.error(map_error(&e));
+                    return;
+                }
+            };
+            let off = offset as u64;
+            if off >= file_sz {
+                reply.data(&[]);
+                return;
+            }
+
+            //facciamo clamping a EOF
+            let need = (size as u64).min(file_sz - off);
+            match self.backend.read_chunk(path.to_str().unwrap(), off, need) {
+                Ok(data) => {
+                    let data = if data.len() as u64 > need {
+                        data[..need as usize].to_vec()
+                    }else{
+                        data
+                    };
+                    reply.data(&data);
+                },
                 Err(e) => reply.error(map_error(&e)),
             }
         } else {
