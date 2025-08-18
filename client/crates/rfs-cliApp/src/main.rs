@@ -12,7 +12,7 @@ use std::thread;
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
 struct Cli {
-    #[arg(short, long, default_value = "/Users/matteo/mnt/remote")]
+    #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
     mount_point: String,
 
     #[arg(short, long, default_value = "https://educational-shannen-politecnico-di-torino-b6588608.koyeb.app")]
@@ -22,11 +22,17 @@ struct Cli {
 fn main() {
 
     let cli = Cli::parse();
-    // authentication (actually saving cookies)
-    if let Err(e) = HttpBackend::new(cli.remote_address.clone(), true) {
-        eprintln!("Unable to get the authhenticate: {}", e);
-        std::process::exit(1);
-    }
+
+    // authentication
+    let (credentials, sessionid) = match rfs_api::Credentials::first_authentication(cli.remote_address.clone()) {
+        Ok(creds) => creds,
+        Err(e) => {
+            eprintln!("Error reading credentials: {}", e);
+            std::process::exit(1);
+        }
+    };
+    eprintln!("Authentication successful.");
+
 
     #[cfg(target_os = "linux")]
     {
@@ -38,27 +44,24 @@ fn main() {
             .stderr(stderr) // log stderr
             .working_directory("/")
             .umask(0o027); // file's default permissions
-        match daemonize.start() {
-            Ok(_) => {},
-            Err(e) => {
-            eprintln!("Error in daemonize: {}", e);
-            std::process::exit(1);
-            }
-        }
+        //match daemonize.start() {
+        //    Ok(_) => {},
+        //    Err(e) => {
+        //    eprintln!("Error in daemonize: {}", e);
+        //    std::process::exit(1);
+        //    }
+        //}
     }
 
     let options = vec![
         MountOption::FSName("Remote-FS".to_string()),
         MountOption::RW,
-        MountOption::AllowOther, // <--- aggiungi questa
     ];
 
-    // real backend: reads previously saved cookies
     let http_backend;
-    match HttpBackend::new(cli.remote_address.clone(), false) {
+    match HttpBackend::new(cli.remote_address.clone(), credentials, sessionid) {
         Ok(be) => http_backend = be,
         Err(_) => {
-            eprintln!("Unable to get the cookies from /tmp/rfs-token");
             std::process::exit(1);
         }
     }
