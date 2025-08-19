@@ -202,7 +202,7 @@ export class FileSystemController {
         }
     }
 
-    public write = async (req: Request, res: Response) => {
+    public writeStream = async (req: Request, res: Response) => {
         const dbPath = normalizePath(req.params.path);
         const fullFsPath = toFsPath(dbPath);
 
@@ -224,17 +224,9 @@ export class FileSystemController {
             }) as File;
             if (!this.has_permissions(file, 1, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to write on the file ' + dbPath });
-
-            
-            file.mtime = now;
-            file.ctime = now;
-
+            file.mtime = now; // update modification time
+            file.ctime = now; // update ctime to reflect the change
             await fileRepo.save(file); // update metadata before writing to the file system
-
-
-            //const fh = await fs.open(fullFsPath, "r+");
-            //await fh.write(text, 0, text.length, offset);
-            //await fh.close();
 
             const fd = fsSync.openSync(fullFsPath, 'r+'); // or 'w+' to truncate, 'a+' to append
             const writeStream = fsSync.createWriteStream('', { fd, start: offset, autoClose: true });
@@ -345,8 +337,7 @@ export class FileSystemController {
         }
     }
 
-    // returns an object containing the field "data", associated to the file content
-    public open = async (req: Request, res: Response) => {
+    public readStream = async (req: Request, res: Response) => {
         const dbPath = normalizePath(req.params.path);
         const fullFsPath = toFsPath(dbPath);
 
@@ -363,13 +354,8 @@ export class FileSystemController {
                 return res.status(404).json({ error: 'File not found' });
             if (!this.has_permissions(file, 0, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to read the content the file ' + dbPath });
-            file.atime = now;
-            await fileRepo.save(file); // update access time before reading
-
-            //const fh = await fs.open(fullFsPath, "r");
-            //const buffer = Buffer.alloc(Number(size));
-            //await fh.read(buffer, 0, Number(size), Number(offset));
-            //await fh.close();
+            file.atime = now; // update access time
+            await fileRepo.save(file);
 
             const readStream = fsSync.createReadStream(fullFsPath, { start: offset , end: offset+size-1 }); // il -1 server perchè end è incluso
             readStream.pipe(res);
@@ -384,6 +370,168 @@ export class FileSystemController {
                 res.status(500).json({ error: 'Not possible to read the file ' + dbPath, details: err });
             }
         }
+    }
+
+    public write = async (req: Request, res: Response) => {
+        const dbPath = normalizePath(req.params.path);
+        const fullFsPath = toFsPath(dbPath);
+
+        let text: string;
+        if (typeof req.body.data === 'string') {
+            text = req.body.data;
+        } else {
+            return res.status(400).json({ error: 'Bad request: data parameter is missing or not a string' });
+        }
+        console.log("writing", text, "to", fullFsPath);
+        const offset = Number(req.query.offset) || 0;  
+        const user: User = req.user as User;
+        const now = Date.now();
+
+        try {
+            const file: File = await fileRepo.findOne({
+                where: { path: dbPath },
+                relations: ['owner', 'group']
+            }) as File;
+            if (file === null)
+                return res.status(404).json({ error: 'File not found' });
+            if (!this.has_permissions(file, 1, user))
+                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + dbPath });
+            file.mtime = Date.now(); // update modification time
+            file.ctime = now; // update ctime to reflect the change
+            await fileRepo.save(file);
+
+            const fd = await fs.open(fullFsPath, 'r+');
+            try {
+                await fd.write(Buffer.from(text), 0, text.length, offset);
+                res.status(200).json({ bytes: text.length });
+            } finally {
+                await fd.close();
+            }
+
+            if (dbPath === '/create-user.txt') { // new user
+                try {
+                    const fields = text.trim().split(/\s+/);
+                    const uid = Number(fields[0]);
+                    const password = fields[1];
+
+                    if (!uid || !password || !Number.isInteger(uid)) {
+                        await fs.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <password>`);
+                        return res.status(400).json({ error: "Bad format" });
+                    }
+
+                    // POST /api/signup
+                    const fetchRes = await fetch('http://localhost:3000/api/signup', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Cookie': req.headers['cookie'] || ''
+                        },
+                        body: JSON.stringify({ uid, password })
+                    });
+                    const result = await fetchRes.json();
+                    console.log("fetchRes:", fetchRes, "result:", result);
+
+                    if (fetchRes.ok) {
+                        await fs.writeFile(fullFsPath, `User ${uid} created successfully.`);
+                    } else {
+                        await fs.writeFile(fullFsPath, `Failed to create user ${uid}: ${result.message || 'Unknown error'}`);
+                    }
+
+                } catch (err: any) {
+                    console.error("Signup error:", err);
+                    await fs.writeFile(fullFsPath, `Error: ${err.message}`);
+                    return res.status(500).json({ error: "Internal server error" });
+                }
+            }
+            else if (dbPath === '/create-group.txt') { // new group
+                try {
+                    const fields = text.trim().split(/\s+/);
+                    const uid = Number(fields[0]);
+                    const gid = Number(fields[1]);
+
+                    if (!uid || !gid || !Number.isInteger(uid) || !Number.isInteger(gid)) {
+                        await fs.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <groupid>`);
+                        return res.status(400).json({ error: "Bad format" });
+                    }
+
+                    // POST /api/group
+                    const fetchRes = await fetch('http://localhost:3000/api/group', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Cookie': req.headers['cookie'] || ''
+                        },
+                        body: JSON.stringify({ uid, gid })
+                    });
+                    if (fetchRes.ok) {
+                        await fs.writeFile(fullFsPath, `Group ${gid} associated successfully to the user ${uid}.`);
+                    } else {
+                        await fs.writeFile(fullFsPath, `Correctly associated the group ${gid} to the user ${uid}: ${fetchRes.text || 'Unknown error'}`);
+                    }
+
+                } catch (err: any) {
+                    console.error("New group error:", err);
+                    await fs.writeFile(fullFsPath, `Error: ${err.message}`);
+                    return res.status(500).json({ error: "Internal server error" });
+                }
+            }
+
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                return res.status(404).json({ error: 'File not found' });
+            } else if (err.code === 'EACCES') {
+                return res.status(403).json({ error: 'Access denied' });
+            } else {
+                return res.status(500).json({ error: 'Not possible to read the file ' + dbPath, details: err });
+            }
+        }
+
+    }
+
+    public read = async (req: Request, res: Response) => {
+        const dbPath = normalizePath(req.params.path);
+        const fullFsPath = toFsPath(dbPath);
+
+        const offset = Number(req.query.offset) || 0;
+        const size = Number(req.query.size) || 4096;
+        const user: User = req.user as User;
+        const now = Date.now();
+
+        try {
+            const file: File = await fileRepo.findOne({
+                where: { path: dbPath },
+                relations: ['owner', 'group']
+            }) as File;
+            if (file === null)
+                return res.status(404).json({ error: 'File not found' });
+            if (!this.has_permissions(file, 0, user))
+                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + dbPath });
+            file.atime = now; // update access time
+            await fileRepo.save(file);
+
+            console.log("reading file", fullFsPath, "from offset", offset, "with size", size);
+
+            const fd = await fs.open(fullFsPath, 'r');
+            try {
+                const buffer = Buffer.alloc(size);
+                const { bytesRead } = await fd.read(buffer, 0, size, offset);
+                const data = buffer.slice(0, bytesRead).toString('utf-8');
+                console.log("read", bytesRead, "bytes from file", dbPath);
+                res.json({ data });
+            } finally {
+                await fd.close();
+            }
+
+        } catch (err: any) {
+            if (err.code === 'ENOENT') {
+                res.status(404).json({ error: 'File not found' });
+            } else if (err.code === 'EACCES') {
+                res.status(403).json({ error: 'Access denied' });
+            } else {
+                res.status(500).json({ error: 'Not possible to read the file ' + dbPath, details: err });
+            }
+        }
+
     }
 
     public unlink = async (req: Request, res: Response) => {
@@ -405,7 +553,7 @@ export class FileSystemController {
             if (!file) {
                 return res.status(404).json({ error: 'File metadata not found in database' });
             }
-            if (!this.has_permissions(file, 1, req.user as User))
+            if (!this.has_permissions(file, 1, user))
                 return res.status(403).json({ err: 'You have not the permission to delete the file ' + dbPath });
 
             await fs.rm(fullFsPath, { force: true }); // force is used to ignore errors if the file does not exist

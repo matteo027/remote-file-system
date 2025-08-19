@@ -219,7 +219,7 @@ impl HttpBackend {
                     if !token_expired {
                         self.authenticate()?;
                         token_expired = true;
-                        continue; // Retry the request after re-authentication
+                        continue; // retry the request after re-authentication
                     }
                     return Err(BackendError::Unauthorized);
                 },
@@ -248,7 +248,7 @@ impl HttpBackend {
                     if !token_expired {
                         self.authenticate()?;
                         token_expired = true;
-                        continue; // Retry the request after re-authentication
+                        continue; // retry the request after re-authentication
                     }
                     return Err(BackendError::Unauthorized);
                 },
@@ -273,7 +273,7 @@ impl HttpBackend {
     //                 if !token_expired {
     //                     self.authenticate()?;
     //                     token_expired = true;
-    //                     continue; // Retry the request after re-authentication
+    //                     continue; // retry the request after re-authentication
     //                 }
     //                 return Err(BackendError::Unauthorized);
     //             },
@@ -331,14 +331,16 @@ impl RemoteBackend for HttpBackend {
     }
 
     fn read_chunk(&self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
+        println!("Reading chunk from path: {}, offset: {}, size: {}", path, offset, size);
         let endpoint = format!("api/files/{}?offset={}&size={}", path.trim_start_matches('/'), offset, size);
         let resp: serde_json::Value = self.request::<serde_json::Value, ()>(Method::GET, &endpoint, None)?;
         Ok(resp["data"].as_str().map(|s| s.as_bytes().to_vec()).unwrap_or_default())
     }
 
     fn write_chunk(&self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
+        let text = String::from_utf8_lossy(&data).to_string();
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
-        let body = serde_json::json!({ "offset": offset, "data": data });
+        let body = serde_json::json!({ "offset": offset, "data": text });
         let resp: serde_json::Value = self.request(Method::PUT, &endpoint, Some(&body))?;
         Ok(resp["bytes"].as_u64().unwrap_or(0))
     }
@@ -377,7 +379,7 @@ impl RemoteBackend for HttpBackend {
                     if !token_expired {
                         self.authenticate()?;
                         token_expired = true;
-                        continue; // Retry the request after re-authentication
+                        continue; // retry the request after re-authentication
                     }
                     return Err(BackendError::Unauthorized);
                 },

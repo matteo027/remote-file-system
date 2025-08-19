@@ -18,8 +18,10 @@ export function setRoutes(app: Express) {
     router.get('/api/files/attributes/{*path}', isLoggedIn, filesystemController.getattr);
 
     router.post('/api/files/{*path}', isLoggedIn, filesystemController.create);
+    router.put('/api/files/stream/{*path}', isLoggedIn, filesystemController.writeStream);
+    router.get('/api/files/stream/{*path}', isLoggedIn, filesystemController.readStream);
     router.put('/api/files/{*path}', isLoggedIn, filesystemController.write);
-    router.get('/api/files/{*path}', isLoggedIn, filesystemController.open);
+    router.get('/api/files/{*path}', isLoggedIn, filesystemController.read);
     router.delete('/api/files/{*path}', isLoggedIn, filesystemController.unlink);
     router.patch('/api/files/{*path}', isLoggedIn, filesystemController.rename); // rename
 }
