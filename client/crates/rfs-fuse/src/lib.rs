@@ -1,13 +1,14 @@
 use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
-use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError};
-use std::collections::HashMap;
+use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream};
+use std::{collections::HashMap, sync::Arc};
 use libc::ENOENT;
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
-use rfs_models::ByteStream;
+use tokio::runtime::Runtime;
+use futures_util::StreamExt;
 
 const TTL: Duration = Duration::from_secs(1);
 const ROOT_INO: u64 = 1;
@@ -41,6 +42,7 @@ enum ReadMode{
 
 pub struct RemoteFS<B: RemoteBackend> {
     backend: B,
+    rt: Arc<Runtime>, // runtime per eseguire le operazioni asincrone
     next_ino: u64, // inode number da allocare, deve essere coerente solo in locale al client
     path_to_ino: HashMap<PathBuf, u64>, // mappa path → inode, per ora è inefficiente ricerca al contrario di inode to path, magari mettere altra mappa
     next_fh: u64, // file handle da allocare
@@ -48,9 +50,10 @@ pub struct RemoteFS<B: RemoteBackend> {
 }
 
 impl<B: RemoteBackend> RemoteFS<B> {
-    pub fn new(backend: B) -> Self {
+    pub fn new(backend: B, runtime: Arc<Runtime>) -> Self {
         Self {
             backend,
+            rt: runtime,
             next_ino: ROOT_INO + 1, // il primo inode disponibile è ROOT_INO + 1
             path_to_ino: HashMap::new(),
             next_fh: 1, // il primo file handle è 1

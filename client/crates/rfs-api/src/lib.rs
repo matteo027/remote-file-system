@@ -45,7 +45,7 @@ struct FileServerResponse {
 }
 
 pub struct HttpBackend {
-    runtime: Runtime, // from tokio, used to manage async calls
+    runtime: Arc<Runtime>, // from tokio, used to manage async calls
     base_url: Url,
     client: Client,
     cookie_jar: Arc<Jar>,
@@ -123,7 +123,7 @@ where
 }
 
 impl HttpBackend {
-    pub fn new(address: String, credentials: Credentials, sid: String) -> Result<Self, BackendError> {
+    pub fn new(address: String, credentials: Credentials, sid: String, rt: Arc<Runtime>) -> Result<Self, BackendError> {
         let base_url = Url::from_str(&address).expect("Invalid url");
         let cookie_jar = Arc::new(Jar::default());
         let cookie_str = format!("connect.sid={}", sid.trim());
@@ -136,7 +136,7 @@ impl HttpBackend {
 
 
         let httpb = Self {
-            runtime: Runtime::new().expect("Unable to built a Runtime object"),
+            runtime: rt,
             base_url,
             client,
             cookie_jar,

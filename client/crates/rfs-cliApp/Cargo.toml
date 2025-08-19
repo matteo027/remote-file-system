@@ -14,3 +14,4 @@ rfs-fuse = { version = "0.1.0", path = "../rfs-fuse" }
 rfs-fuse-macos = { version = "0.1.0", path = "../rfs-fuse-macos" }
 rfs-models = { version = "0.1.0", path = "../rfs-models" }
 signal-hook = "0.3.18"
+tokio = "1.47.1"

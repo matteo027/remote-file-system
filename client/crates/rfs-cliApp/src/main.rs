@@ -2,12 +2,13 @@ use clap::Parser;
 use daemonize::Daemonize;
 use fuser::{MountOption};
 use rfs_fuse::RemoteFS;
-use rfs_fuse_macos::RemoteFS as RemoteFSMacOS;
+//use rfs_fuse_macos::RemoteFS as RemoteFSMacOS;
 use std::{fs::File, sync::{Arc, Condvar, Mutex}};
 use rfs_api::HttpBackend;
 use rfs_cache::Cache;
 use signal_hook::{consts::signal::*, iterator::Signals};
 use std::thread;
+use tokio::runtime::Builder;
 
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
@@ -58,8 +59,10 @@ fn main() {
         MountOption::RW,
     ];
 
+    let runtime= Arc::new(Builder::new_multi_thread().enable_all().build().expect("Unable to build a Runtime object"));
+
     let http_backend;
-    match HttpBackend::new(cli.remote_address.clone(), credentials, sessionid) {
+    match HttpBackend::new(cli.remote_address.clone(), credentials, sessionid, runtime.clone()) {
         Ok(be) => http_backend = be,
         Err(_) => {
             std::process::exit(1);
@@ -69,7 +72,7 @@ fn main() {
     let fs;
     #[cfg(target_os = "linux")]
     {
-        fs = RemoteFS::new(cache);
+        fs = RemoteFS::new(cache, runtime.clone());
     }
     #[cfg(target_os = "macos")]
     {
