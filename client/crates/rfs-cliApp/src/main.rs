@@ -16,7 +16,7 @@ struct Cli {
     #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
     mount_point: String,
 
-    #[arg(short, long, default_value = "https://educational-shannen-politecnico-di-torino-b6588608.koyeb.app")]
+    #[arg(short, long, default_value = "http://localhost:3000")]
     remote_address: String,
 }
 
