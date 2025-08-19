@@ -670,8 +670,7 @@ export class FileSystemController {
                 return res.status(403).json({ error: `No permission on ${dbPath}` });
             }
 
-            if (newPerm !== undefined) {
-                // await fs.chmod(fullFsPath, newPerm); // non c'è bisogno di cambiare i metadati effettivi del file
+            if (newPerm !== undefined && newPerm >= 0o000 && newPerm <= 0o777 && newPerm !== file.permissions) {
                 file.permissions = newPerm;
                 file.ctime = now; // update ctime to reflect the change
             }
