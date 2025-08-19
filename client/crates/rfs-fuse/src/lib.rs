@@ -8,7 +8,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 use tokio::runtime::Runtime;
-use futures_util::StreamExt;
+use tokio_stream::StreamExt;
 
 const TTL: Duration = Duration::from_secs(1);
 const ROOT_INO: u64 = 1;
@@ -88,7 +88,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
         FileAttr {
             ino,
             size: entry.size,
-            blocks: (entry.size + 4095) / 4096, // blocchi di 4096 byte
+            blocks: (entry.size + 511) / 512, // blocchi di 512 byte
             atime: entry.atime,
             mtime: entry.mtime,
             ctime: entry.ctime,
@@ -189,7 +189,9 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                     } else {
                         FileType::RegularFile
                     };
-                    let _ = reply.add(ino, (i as i64) + 3, kind, &entry.name);
+                    if reply.add(ino, (i as i64) + 3, kind, &entry.name){
+                        break; // Se non c'è spazio per aggiungere altri elementi, esci
+                    }
                 }
                 reply.ok();
             }
@@ -197,7 +199,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn create(&mut self,_req: &Request<'_>, parent: u64,name: &OsStr,_mode: u32,_umask: u32,flags: i32,reply: ReplyCreate,) {
+    fn create(&mut self,_req: &Request<'_>, parent: u64,name: &OsStr,_mode: u32,_umask: u32,_flags: i32,reply: ReplyCreate,) {
         let dir = self
             .inode_to_path(parent)
             .unwrap_or_else(|| PathBuf::from("/"));
@@ -206,7 +208,10 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             Ok(entry) => {
                 let ino = self.get_local_ino(&path);
                 let attr = self.entry_to_attr(ino, &entry);
-                reply.created(&TTL, &attr, 0, 0, flags as u32);
+                let fh=self.next_fh;
+                self.next_fh += 1; // incrementa il file handle per il prossimo file
+                self.file_handles.insert(fh, ReadMode::SmallPages); // inizializza il
+                reply.created(&TTL, &attr, 0, fh, fuser::consts::FOPEN_DIRECT_IO); // FOPEN_KEEP_CACHE se vuoi mantenere la cache del kernel
             }
             Err(e) => reply.error(map_error(&e)),
         }
@@ -301,11 +306,11 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         };
 
         let off = offset as u64;
-        let need= (size as u64).min(file_size - off) as usize;
-        if off >= file_size || need == 0 {
+        if off >= file_size {
             return reply.data(&[]); // Se l'offset è oltre la fine del file, ritorniamo un array vuoto
         }
-
+        let need= (size as u64).min(file_size - off) as usize;
+        
         match self.file_handles.get_mut(&fh) {
             Some(ReadMode::LargeStream(state)) => {
                 if state.stream.is_none() || state.pos != off{

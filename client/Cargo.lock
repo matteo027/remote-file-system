@@ -1137,6 +1137,7 @@ dependencies = [
  "libc",
  "rfs-models",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

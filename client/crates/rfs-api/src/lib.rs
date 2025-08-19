@@ -12,7 +12,8 @@ use std::str::{ FromStr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
-use futures_util::stream::TryStreamExt;
+use tokio_stream::StreamExt;
+
 
 #[derive(Deserialize, Debug)]
 struct ErrorResponse {
@@ -366,10 +367,10 @@ impl RemoteBackend for HttpBackend {
             let endpoint = format!("api/stream/files/{}?offset={}", path.trim_start_matches('/'), offset);
             let url = self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
             let req = self.client.request(Method::GET, url);
-            let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
+            let resp = self.runtime.block_on(async { req.send().await}).map_err(|e| BackendError::Other(e.to_string()))?;
             match resp.status() {
                 StatusCode::OK => {
-                    let s=resp.bytes_stream().map_err(|e| BackendError::Other(e.to_string()));
+                    let s=resp.bytes_stream().map(|r| r.map_err(|e| BackendError::Other(e.to_string())));
                     return Ok(Box::pin(s));
                 },
                 StatusCode::UNAUTHORIZED => {
@@ -381,7 +382,7 @@ impl RemoteBackend for HttpBackend {
                     return Err(BackendError::Unauthorized);
                 },
                 StatusCode::CONFLICT => {
-                    let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
+                    let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await}).map(|e| e.error).unwrap_or_else(|_| "Conflict".to_string());
                     return Err(BackendError::Conflict(err));
                 },
                 _ => return Err(BackendError::Other("Unexpected error".into())),

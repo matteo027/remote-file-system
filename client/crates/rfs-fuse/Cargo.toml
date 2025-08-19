@@ -9,3 +9,4 @@ futures-util = "0.3.31"
 libc = "0.2.174"
 rfs-models = { version = "0.1.0", path = "../rfs-models" }
 tokio = "1.47.1"
+tokio-stream = "0.1.17"
