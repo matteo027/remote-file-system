@@ -1149,8 +1149,10 @@ dependencies = [
 name = "rfs-models"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "serde",
  "thiserror",
+ "tokio-stream",
 ]
 
 [[package]]

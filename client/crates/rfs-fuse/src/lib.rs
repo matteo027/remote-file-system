@@ -5,12 +5,14 @@ use libc::ENOENT;
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
-    sync::{Mutex, atomic::{AtomicU64, Ordering}},
     time::{Duration, SystemTime},
 };
+use rfs_models::ByteStream;
 
 const TTL: Duration = Duration::from_secs(1);
 const ROOT_INO: u64 = 1;
+
+const LARGE_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
 
 fn map_error(error: &BackendError) -> libc::c_int {
     use libc::{EIO, EACCES, EEXIST, EHOSTUNREACH};
@@ -25,35 +27,50 @@ fn map_error(error: &BackendError) -> libc::c_int {
     }
 }
 
+struct StreamState{
+    path: String,
+    pos: u64,
+    buffer: Vec<u8>,
+    stream: Option<ByteStream>,
+}
+
+enum ReadMode{
+    SmallPages,
+    LargeStream(StreamState),
+}
+
 pub struct RemoteFS<B: RemoteBackend> {
     backend: B,
-    next_ino: AtomicU64, // inode number da allocare, deve essere coerente solo in locale al client
-    path_to_ino: Mutex<HashMap<PathBuf, u64>>, // mappa path → inode, per ora è inefficiente ricerca al contrario di inode to path, magari mettere altra mappa
+    next_ino: u64, // inode number da allocare, deve essere coerente solo in locale al client
+    path_to_ino: HashMap<PathBuf, u64>, // mappa path → inode, per ora è inefficiente ricerca al contrario di inode to path, magari mettere altra mappa
+    next_fh: u64, // file handle da allocare
+    file_handles: HashMap<u64, ReadMode>, // mappa file handle, per gestire read in streaming continuo su file già aperti
 }
 
 impl<B: RemoteBackend> RemoteFS<B> {
     pub fn new(backend: B) -> Self {
         Self {
             backend,
-            next_ino: AtomicU64::new(ROOT_INO + 1), // il primo inode disponibile è ROOT_INO + 1
-            path_to_ino: Mutex::new(HashMap::new()),
+            next_ino: ROOT_INO + 1, // il primo inode disponibile è ROOT_INO + 1
+            path_to_ino: HashMap::new(),
+            next_fh: 1, // il primo file handle è 1
+            file_handles: HashMap::new(),
         }
     }
 
-    fn get_local_ino(&self, path: &PathBuf) -> u64 {
-        if let Some(ino) = self.path_to_ino.lock().unwrap().get(path) {
+    fn get_local_ino(&mut self, path: &PathBuf) -> u64 {
+        if let Some(ino) = self.path_to_ino.get(path) {
             return *ino;
         } else {
-            let ino = self.next_ino.fetch_add(1, Ordering::Relaxed);
-            self.path_to_ino.lock().unwrap().insert(path.clone(), ino);
+            let ino = self.next_ino;
+            self.path_to_ino.insert(path.clone(), ino);
+            self.next_ino += 1;
             return ino;
         }
     }
 
     fn inode_to_path(&self, ino: u64) -> Option<PathBuf> {
         self.path_to_ino
-            .lock()
-            .unwrap()
             .iter()
             .find_map(|(path, &entry_ino)| {
                 if entry_ino == ino {
@@ -88,15 +105,13 @@ impl<B: RemoteBackend> RemoteFS<B> {
 impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
     fn init(&mut self,_req: &Request<'_>,_config: &mut fuser::KernelConfig) -> Result<(), libc::c_int> {
         self.path_to_ino
-            .lock()
-            .unwrap()
             .insert(PathBuf::from("/"), ROOT_INO);
         match self.backend.list_dir("/") {
             Ok(entries) => {
                 for entry in entries {
-                    let path = PathBuf::from("/").join(&entry.path);
-                    let ino = self.next_ino.fetch_add(1, Ordering::Relaxed);
-                    self.path_to_ino.lock().unwrap().insert(path, ino);
+                    let path = PathBuf::from("/").join(&entry.path);                    
+                    self.path_to_ino.insert(path, self.next_ino);
+                    self.next_ino += 1;
                 }
                 Ok(())
             }
@@ -119,7 +134,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                     let full = dir.join(&entry.name);
                     let ino = self.get_local_ino(&full);
                     let attr = self.entry_to_attr(ino, entry);
-                    self.path_to_ino.lock().unwrap().insert(full, ino);
+                    self.path_to_ino.insert(full, ino);
                     reply.entry(&TTL, &attr, 0);
                 } else {
                     reply.error(ENOENT);
@@ -158,8 +173,6 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                     let parent = Path::new(&dir).parent().unwrap_or(Path::new("/"));
                     let parent_ino = *self
                         .path_to_ino
-                        .lock()
-                        .unwrap()
                         .get(parent)
                         .unwrap_or(&ROOT_INO);
                     let _ = reply.add(parent_ino, 2, FileType::Directory, "..");
@@ -218,7 +231,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         let path = dir.join(name);
         match self.backend.delete_file(path.to_str().unwrap()) {
             Ok(_) => {
-                self.path_to_ino.lock().unwrap().remove(&path);
+                self.path_to_ino.remove(&path);
                 reply.ok();
             }
             Err(e) => reply.error(map_error(&e)),
@@ -232,39 +245,115 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         let path = dir.join(name);
         match self.backend.delete_dir(path.to_str().unwrap()) {
             Ok(_) => {
-                self.path_to_ino.lock().unwrap().remove(&path);
+                self.path_to_ino.remove(&path);
                 reply.ok();
             }
             Err(e) => reply.error(map_error(&e)),
         }
     }
 
-    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
-        // DA CONTROLLARE
-        if let Some(path) = self.inode_to_path(ino) {
-            // Se il flag contiene O_TRUNC, tronca il file
-            if flags & libc::O_TRUNC != 0 {
-                if let Ok(_) = self.backend.get_attr(path.to_str().unwrap()) {
-                    let _ = self
-                        .backend
-                        .write_chunk(path.to_str().unwrap(), 0, Vec::new());
-                }
-            }
-            reply.opened(0, flags as u32);
-        } else {
+    fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
+        let Some(path) = self.inode_to_path(ino) else {
             reply.error(ENOENT);
-        }
+            return;
+        };
+
+        let size = match self.backend.get_attr(path.to_str().unwrap()) {
+            Ok(entry) => entry.size as u64,
+            Err(e) => {
+                reply.error(map_error(&e));
+                return;
+            }
+        };
+
+        let mode = if size > LARGE_FILE_SIZE {
+            ReadMode::LargeStream(StreamState {
+                path: path.to_str().unwrap().to_string(),
+                pos: 0,
+                buffer: Vec::new(),
+                stream: None,
+            })
+        } else {
+            ReadMode::SmallPages
+        };
+        let fh= self.next_fh;
+        self.next_fh += 1;
+        self.file_handles.insert(fh, mode);
+        // Siccome abbiamo un layer di cache apposito disabilitiamo quello del kernel con direct io
+        reply.opened(fh, fuser::consts::FOPEN_DIRECT_IO); //FOPEN_KEEP_CACHE se vogliamo mantenere la cache del kernel
     }
 
-    fn read(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,size: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyData,) {
-        if let Some(path) = self.inode_to_path(ino) {
-            match self.backend.read_chunk(path.to_str().unwrap(), offset as u64, size as u64) {
-                Ok(data) => reply.data(&data),
-                Err(e) => reply.error(map_error(&e)),
+    fn read(&mut self,_req: &Request<'_>,ino: u64,fh: u64,offset: i64,size: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyData,) {
+        if offset < 0 {return reply.error(libc::EINVAL);}
+        let Some(path) = self.inode_to_path(ino) else {
+            return reply.error(ENOENT);
+        };
+
+
+        let file_size = match self.backend.get_attr(path.to_str().unwrap()) {
+            Ok(entry) => entry.size as u64,
+            Err(e) => {
+                return reply.error(map_error(&e));
             }
-        } else {
-            reply.error(ENOENT);
+        };
+
+        let off = offset as u64;
+        let need= (size as u64).min(file_size - off) as usize;
+        if off >= file_size || need == 0 {
+            return reply.data(&[]); // Se l'offset è oltre la fine del file, ritorniamo un array vuoto
         }
+
+        match self.file_handles.get_mut(&fh) {
+            Some(ReadMode::LargeStream(state)) => {
+                if state.stream.is_none() || state.pos != off{
+                    match self.backend.read_stream(&state.path, off) {
+                        Ok(stream) => {
+                            state.stream = Some(stream);
+                            state.buffer.clear(); // Pulisci il buffer per il nuovo stream
+                            state.pos = off;
+                        }
+                        Err(e) => return reply.error(map_error(&e)),
+                    }
+                }
+
+                while state.buffer.len() < need {
+                    let s = match state.stream.as_mut() {
+                        Some(s) => s,
+                        None    => break, // stream assente → consegna quello che hai
+                    };
+                    let next = self.rt.block_on(async { s.next().await });
+                    match next {
+                        Some(Ok(bytes)) => state.buffer.extend_from_slice(&bytes),
+                        Some(Err(e))    => { reply.error(map_error(&e)); return; }
+                        None            => break, // EOF lato server
+                    }
+                }
+
+                let take = need.min(state.buffer.len());
+                let out  = state.buffer.drain(..take).collect::<Vec<u8>>();
+                state.pos = state.pos.saturating_add(take as u64);
+                reply.data(&out);
+            }
+            Some(ReadMode::SmallPages) => {
+                match self.backend.read_chunk(path.to_str().unwrap(), off, need as u64) {
+                    Ok(mut data) => {
+                        if data.len() > need {data.truncate(need);}
+                        reply.data(&data);
+                    }
+                    Err(e) => return reply.error(map_error(&e)),
+                }
+            }
+            None => {
+                return reply.error(libc::EBADF); // File handle non trovato
+            }
+        }
+
+    }
+
+    fn release(&mut self, _req: &Request<'_>, _ino: u64, fh: u64, _flags: i32, _lock_owner: Option<u64>, _flush: bool, reply: ReplyEmpty) {
+        // Rimuoviamo il file handle dalla mappa, basta per fare drop automatico della stream e chiuderla immediatamente
+        self.file_handles.remove(&fh);
+        reply.ok();
     }
 
     fn write(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,data: &[u8],_write_flags: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyWrite,) {
@@ -292,9 +381,8 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
 
         match self.backend.rename(old_path.to_str().unwrap(), new_path.to_str().unwrap()){
             Ok(_) => {
-                let mut map = self.path_to_ino.lock().unwrap();
-                if let Some(ino) = map.remove(&old_path) {
-                    map.insert(new_path, ino);
+                if let Some(ino) = self.path_to_ino.remove(&old_path) {
+                    self.path_to_ino.insert(new_path, ino);
                 }
                 reply.ok();
             }

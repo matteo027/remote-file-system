@@ -1,6 +1,8 @@
-use std::time::SystemTime;
+use std::{pin::Pin, time::SystemTime};
 use thiserror::Error;
 use serde::{Deserialize, Serialize};
+use tokio_stream::Stream;
+use bytes::Bytes;
 
 // Modello di dominio per una voce di file system remoto, da utilizzare internamente e per caching
 #[derive(Debug, Clone)]
@@ -66,6 +68,8 @@ pub enum BackendError {
     Other(String),
 }
 
+pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, BackendError>> + Send>>;
+
 pub trait RemoteBackend: Send + Sync {
     /// Lista il contenuto di una directory
     fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, BackendError>;
@@ -87,4 +91,7 @@ pub trait RemoteBackend: Send + Sync {
     fn rename(&self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError>;
     /// Imposta gli attributi di un file o directory
     fn set_attr(&self, path: &str, attrs: SetAttrRequest) -> Result<FileEntry, BackendError>;
+
+    /// legge un file intero come stream di byte (per file molto grandi)
+    fn read_stream(&self, path: &str, offset: u64) -> Result<ByteStream, BackendError>;
 }

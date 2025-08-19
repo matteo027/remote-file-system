@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use reqwest::cookie::Jar;
 use reqwest::{Client, Method, StatusCode, Url};
 use rfs_models::{BackendError, FileEntry, RemoteBackend, SetAttrRequest};
@@ -9,15 +8,11 @@ use serde_json::Value;
 use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::str::{ FromStr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
-use tokio_stream::Stream;
 use futures_util::stream::TryStreamExt;
-use futures_util::StreamExt;
-use futures_util::stream;
 
 #[derive(Deserialize, Debug)]
 struct ErrorResponse {
@@ -28,11 +23,6 @@ struct ErrorResponse {
 pub struct Credentials {
     username: String, // it's the uid
     password: String,
-}
-
-#[derive(Deserialize)]
-struct WriteResponse {
-    bytes: u64,
 }
 
 #[derive(Deserialize,Debug)]
@@ -270,63 +260,30 @@ impl HttpBackend {
         }
     }
 
-    fn request_stream_get(&self, method: Method, endpoint: &str) -> Result<Pin<Box<dyn Stream<Item = Result<bytes::Bytes, BackendError>> + Send>>, BackendError> {
-        let mut token_expired = false;
-        loop {
-            let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
-            let req = self.client.request(method.clone(), url);
-            let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
-            match resp.status() {
-                StatusCode::OK => return Ok(Box::pin(resp.bytes_stream().map_err(|e| BackendError::Other(e.to_string())))),
-                StatusCode::UNAUTHORIZED => {
-                    if !token_expired {
-                        self.authenticate()?;
-                        token_expired = true;
-                        continue; // Retry the request after re-authentication
-                    }
-                    return Err(BackendError::Unauthorized);
-                },
-                StatusCode::CONFLICT => {
-                    let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
-                    return Err(BackendError::Conflict(err));
-                }
-                _ => return Err(BackendError::Other("Unexpected error".into())),
-            };
-        }
-    }
-
-     fn request_stream_send<R: DeserializeOwned + 'static>(&self, method: Method, endpoint: &str, offset: u64, data: Vec<u8>) -> Result<R, BackendError> {
-        let mut token_expired = false;
-        loop {
-            let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
-            let req = self.client.request(method.clone(), url)
-                .header("X-Chunk-Offset", offset.to_string()) // non posso mettere offset nel body in quanto è occupato dallo stream di byte
-                .body(reqwest::Body::wrap_stream(stream::once({
-                    let data = data.clone();
-                    async move { Ok::<Bytes, std::io::Error>(Bytes::from(data)) }
-                })));
-            let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
-            match resp.status() {
-                StatusCode::OK => return self.runtime.block_on(async { resp.json().await.map_err(|_| BackendError::BadAnswerFormat) }),
-                StatusCode::UNAUTHORIZED => {
-                    if !token_expired {
-                        self.authenticate()?;
-                        token_expired = true;
-                        continue; // Retry the request after re-authentication
-                    }
-                    return Err(BackendError::Unauthorized);
-                },
-                StatusCode::CONFLICT => {
-                    let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
-                    return Err(BackendError::Conflict(err));
-                }
-                _ => return Err(BackendError::Other("Unexpected error".into())),
-            };
-        }
-
-    }
-
-
+    // fn request_stream_get(&self, method: Method, endpoint: &str) -> Result<Pin<Box<dyn Stream<Item = Result<bytes::Bytes, BackendError>> + Send>>, BackendError> {
+    //     let mut token_expired = false;
+    //     loop {
+    //         let url = self.base_url.join(endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
+    //         let req = self.client.request(method.clone(), url);
+    //         let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
+    //         match resp.status() {
+    //             StatusCode::OK => return Ok(Box::pin(resp.bytes_stream().map_err(|e| BackendError::Other(e.to_string())))),
+    //             StatusCode::UNAUTHORIZED => {
+    //                 if !token_expired {
+    //                     self.authenticate()?;
+    //                     token_expired = true;
+    //                     continue; // Retry the request after re-authentication
+    //                 }
+    //                 return Err(BackendError::Unauthorized);
+    //             },
+    //             StatusCode::CONFLICT => {
+    //                 let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
+    //                 return Err(BackendError::Conflict(err));
+    //             }
+    //             _ => return Err(BackendError::Other("Unexpected error".into())),
+    //         };
+    //     }
+    // }
 }
 
 impl RemoteBackend for HttpBackend {
@@ -373,29 +330,16 @@ impl RemoteBackend for HttpBackend {
     }
 
     fn read_chunk(&self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
-        
-        
         let endpoint = format!("api/files/{}?offset={}&size={}", path.trim_start_matches('/'), offset, size);
-        let mut stream = self.request_stream_get(Method::GET, &endpoint)?;
-        let mut data = Vec::<u8>::new();
-
-        self.runtime.block_on(async {
-            while let Some(chunk) = stream.next().await {
-                let bytes = chunk.expect("Unable to read the chunck");
-                data.extend_from_slice(&bytes);
-            }
-        });
-
-        Ok(data)
+        let resp: serde_json::Value = self.request::<serde_json::Value, ()>(Method::GET, &endpoint, None)?;
+        Ok(resp["data"].as_str().map(|s| s.as_bytes().to_vec()).unwrap_or_default())
     }
 
     fn write_chunk(&self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
-        
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
-
-        let resp: WriteResponse = self.request_stream_send(Method::PUT, &endpoint, offset, data)?;
-
-        Ok(resp.bytes)
+        let body = serde_json::json!({ "offset": offset, "data": data });
+        let resp: serde_json::Value = self.request(Method::PUT, &endpoint, Some(&body))?;
+        Ok(resp["bytes"].as_u64().unwrap_or(0))
     }
 
     fn rename(&self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
@@ -414,5 +358,34 @@ impl RemoteBackend for HttpBackend {
         let f: FileServerResponse = self.request::<FileServerResponse, Value>(Method::PATCH, &endpoint, Some(&body))?;
         
         Ok(Self::response_to_entry(f))
+    }
+
+    fn read_stream(&self, path: &str, offset: u64) -> Result<rfs_models::ByteStream, BackendError> {
+        let mut token_expired=false;
+        loop{
+            let endpoint = format!("api/stream/files/{}?offset={}", path.trim_start_matches('/'), offset);
+            let url = self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
+            let req = self.client.request(Method::GET, url);
+            let resp = self.runtime.block_on(async { req.send().await.map_err(|e| BackendError::Other(e.to_string())) })?;
+            match resp.status() {
+                StatusCode::OK => {
+                    let s=resp.bytes_stream().map_err(|e| BackendError::Other(e.to_string()));
+                    return Ok(Box::pin(s));
+                },
+                StatusCode::UNAUTHORIZED => {
+                    if !token_expired {
+                        self.authenticate()?;
+                        token_expired = true;
+                        continue; // Retry the request after re-authentication
+                    }
+                    return Err(BackendError::Unauthorized);
+                },
+                StatusCode::CONFLICT => {
+                    let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
+                    return Err(BackendError::Conflict(err));
+                },
+                _ => return Err(BackendError::Other("Unexpected error".into())),
+            }
+        }
     }
 }

@@ -3,6 +3,7 @@ use rfs_models::{RemoteBackend, FileEntry, BackendError, SetAttrRequest};
 use std::sync::{Arc,Mutex};
 use std::num::NonZeroUsize;
 use std::path::Path;
+use rfs_models::ByteStream;
 
 type FileChunkKey = (String, u64, u64); // (path, offset, length)
 
@@ -162,5 +163,9 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         // put fa già override sulla cache
         self.attr_cache.lock().unwrap().put(path.to_string(), entry.clone());
         Ok(entry)
+    }
+
+    fn read_stream(&self, path: &str, offset: u64) -> Result<ByteStream, BackendError> {
+        self.http_backend.read_stream(path, offset)
     }
 }
