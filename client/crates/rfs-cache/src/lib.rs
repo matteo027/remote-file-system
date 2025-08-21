@@ -141,7 +141,12 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
                 data
             }else{
                 // Se il chunk non è in cache, lo leggo dal backend e lo metto
-                let data= self.http_backend.read_chunk(path, page_off, PAGE_SIZE as u64)?;
+                let data;
+                if idx == last{
+                    data = self.http_backend.read_chunk(path, page_off, size % PAGE_SIZE as u64)?;
+                }else{
+                    data = self.http_backend.read_chunk(path, page_off, PAGE_SIZE as u64)?;
+                }
                 self.page_cache.lock().unwrap().put((path.to_string(), idx), data.clone());
                 data
             };

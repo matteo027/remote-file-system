@@ -57,6 +57,7 @@ fn main() {
     let options = vec![
         MountOption::FSName("Remote-FS".to_string()),
         MountOption::RW,
+        MountOption::AutoUnmount,
     ];
 
     let runtime= Arc::new(Builder::new_multi_thread().enable_all().build().expect("Unable to build a Runtime object"));
@@ -79,8 +80,7 @@ fn main() {
         fs = RemoteFSMacOS::new(cache);
     }
      
-    let session = fuser::spawn_mount2(fs, &cli.mount_point, &options)
-        .expect("failed to mount");
+    let session = fuser::spawn_mount2(fs, &cli.mount_point, &options).expect("failed to mount");
 
     let pair = Arc::new((Mutex::new(false), Condvar::new()));
     let pair_clone = pair.clone();
@@ -94,7 +94,7 @@ fn main() {
                     let mut stop = lock.lock().unwrap();
                     *stop = true;
                     cvar.notify_one();
-                    eprintln!("\nSignal received. Unmounting...");
+                    println!("\nSignal received. Unmounting...");
                 },
                 other => {
                     eprintln!("Signal not hanlded: {}", other);
@@ -108,9 +108,8 @@ fn main() {
 
     // waits for the signal
     let (lock, cvar) = &*pair;
-    let mut stop = lock.lock().unwrap();
-    stop = cvar.wait_while(stop, |s|{!*s}).expect("Mutex poisoned");
-
+    let _stop = cvar.wait_while(lock.lock().unwrap(), |s|{!*s}).expect("Mutex poisoned");
+    println!("Unmounting Remote-FS...");
     drop(session);
     println!("Remote-FS unmounted correctly");
     return;

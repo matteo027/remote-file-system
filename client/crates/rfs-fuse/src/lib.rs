@@ -19,8 +19,7 @@ const LARGE_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
 fn map_error(error: &BackendError) -> libc::c_int {
     use libc::{EIO, EACCES, EEXIST, EHOSTUNREACH};
     match error {
-        BackendError::NotFound(err) => {
-            eprintln!("Not found: {}", err);
+        BackendError::NotFound(_) => {
             ENOENT
         },
         BackendError::Unauthorized => {
@@ -146,7 +145,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
 
     fn destroy(&mut self) {
         // pulizia finale, se necessaria
-        println!("Remote-FS unmounted correctly");
+        println!("Fuse layer destroyed.");
     }
 
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {

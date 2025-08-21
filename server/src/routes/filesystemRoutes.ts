@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import express from 'express';
 import { FileSystemController } from '../controllers/filesystemController';
 import { Express } from 'express-serve-static-core';
 import { AuthenticationController } from '../controllers/authenticationController';
@@ -20,7 +21,7 @@ export function setRoutes(app: Express) {
     router.post('/api/files/{*path}', isLoggedIn, filesystemController.create);
     router.put('/api/files/stream/{*path}', isLoggedIn, filesystemController.writeStream);
     router.get('/api/files/stream/{*path}', isLoggedIn, filesystemController.readStream);
-    router.put('/api/files/{*path}', isLoggedIn, filesystemController.write);
+    router.put('/api/files/{*path}', isLoggedIn, express.raw({type:'application/octet-stream'}), filesystemController.write);
     router.get('/api/files/{*path}', isLoggedIn, filesystemController.read);
     router.delete('/api/files/{*path}', isLoggedIn, filesystemController.unlink);
     router.patch('/api/files/{*path}', isLoggedIn, filesystemController.rename); // rename

@@ -1,4 +1,5 @@
 use reqwest::cookie::Jar;
+use reqwest::header::{HeaderValue, CONTENT_TYPE};
 use reqwest::{Client, Method, Response, StatusCode, Url};
 use rfs_models::{BackendError, FileEntry, RemoteBackend, SetAttrRequest};
 use rpassword::read_password;
@@ -280,11 +281,17 @@ impl RemoteBackend for HttpBackend {
     }
 
     fn write_chunk(&self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
-        let text = String::from_utf8_lossy(&data).to_string();
-        let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
-        let body = serde_json::json!({ "offset": offset, "data": text });
-        let resp: serde_json::Value = self.request_response(Method::PUT, &endpoint, Some(&body))?;
-        Ok(resp["bytes"].as_u64().unwrap_or(0))
+        let endpoint = format!("api/files/{}?offset={}", path.trim_start_matches('/'), offset);
+        let url= self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
+        let req=self.client.request(Method::PUT, url).header(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream")).body(data);
+        let resp= self.runtime.block_on(async {req.send().await}).map_err(|e| BackendError::Other(e.to_string()))?;
+        match resp.status() {
+            StatusCode::OK | StatusCode::CREATED => {
+                let risp : serde_json::Value = self.runtime.block_on(async { resp.json().await }).map_err(|_| BackendError::BadAnswerFormat)?;
+                Ok(risp["bytes"].as_u64().unwrap_or(0))
+            },
+            _ => Err(self.decode_error(resp, &endpoint)),
+        }
     }
 
     fn rename(&self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
