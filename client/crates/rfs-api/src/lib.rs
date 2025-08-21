@@ -49,7 +49,6 @@ pub struct HttpBackend {
     runtime: Arc<Runtime>, // from tokio, used to manage async calls
     base_url: Url,
     client: Client,
-    cookie_jar: Arc<Jar>,
     credentials: Credentials
 }
 
@@ -130,7 +129,7 @@ impl HttpBackend {
         let cookie_str = format!("connect.sid={}", sid.trim());
         cookie_jar.add_cookie_str(&cookie_str, &base_url);
         let client = reqwest::Client::builder()
-            .cookie_provider(cookie_jar.clone())
+            .cookie_provider(cookie_jar)
             .build()
             .expect("Unable to build the Client object");
 
@@ -140,7 +139,6 @@ impl HttpBackend {
             runtime: rt,
             base_url,
             client,
-            cookie_jar,
             credentials
         };
 
