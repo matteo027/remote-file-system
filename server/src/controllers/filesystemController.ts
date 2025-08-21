@@ -105,14 +105,12 @@ export class FileSystemController {
         const dbPath    = normalizePath(req.params.path);
         const fullFsPath = toFsPath(dbPath);
 
-        const now = Date.now();
         const user: User = req.user as User;
         if (user == null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
 
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
-
         try {
             await fs.mkdir(fullFsPath);
             const directory = {
@@ -121,11 +119,6 @@ export class FileSystemController {
                 type: 1,
                 permissions: 0o755,
                 group: user_group,
-                size: 0,
-                atime: now,
-                mtime: now,
-                ctime: now,
-                btime: now
             } as File;
             await fileRepo.save(directory);
 
@@ -180,7 +173,6 @@ export class FileSystemController {
 
         const dbPath    = normalizePath(req.params.path);
         const fullFsPath = toFsPath(dbPath);
-        const now = Date.now();
         const user: User = req.user as User;
         if (user === null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
@@ -236,7 +228,6 @@ export class FileSystemController {
         }
 
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
-        const now = Date.now();
 
         try {
 
@@ -361,8 +352,6 @@ export class FileSystemController {
         const fullFsPath = toFsPath(dbPath);
 
         const offset = Number(req.query.offset) || 0;
-        const size = Number(req.query.size) || 4096;
-        const now = Date.now();
 
         try {
             const file: File = await fileRepo.findOne({
@@ -374,9 +363,9 @@ export class FileSystemController {
             if (!this.has_permissions(file, 0, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to read the content the file ' + dbPath });
 
-            const readStream = fsSync.createReadStream(fullFsPath, { start: offset , end: offset+size-1 }); // il -1 server perchè end è incluso
+            const readStream = fsSync.createReadStream(fullFsPath, { start: offset}); // il -1 server perchè end è incluso
             readStream.pipe(res);
-
+            res.on('close', ()=>readStream.destroy());
             //res.json({ data: buffer.toString("utf-8")}); //offset non serve al ritorno
         } catch (err: any) {
             if (err.code === 'ENOENT') {
@@ -402,7 +391,6 @@ export class FileSystemController {
         console.log("writing", text, "to", fullFsPath);
         const offset = Number(req.query.offset) || 0;  
         const user: User = req.user as User;
-        const now = Date.now();
 
         try {
             const file: File = await fileRepo.findOne({
@@ -499,7 +487,6 @@ export class FileSystemController {
                 return res.status(500).json({ error: 'Not possible to read the file ' + dbPath, details: err });
             }
         }
-
     }
 
     public read = async (req: Request, res: Response) => {
@@ -509,7 +496,6 @@ export class FileSystemController {
         const offset = Number(req.query.offset) || 0;
         const size = Number(req.query.size) || 4096;
         const user: User = req.user as User;
-        const now = Date.now();
 
         try {
             const file: File = await fileRepo.findOne({
@@ -529,7 +515,7 @@ export class FileSystemController {
                 const { bytesRead } = await fd.read(buffer, 0, size, offset);
                 const data = buffer.slice(0, bytesRead).toString('utf-8');
                 console.log("read", bytesRead, "bytes from file", dbPath);
-                res.json({ data });
+                res.json(data);
             } finally {
                 await fd.close();
             }
