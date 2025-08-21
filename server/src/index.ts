@@ -101,40 +101,24 @@ async function db() {
         owner: admin,
         type: 1,
         permissions: 0o755,
-        atime: now,
-        btime: now,
-        ctime: now,
-        mtime: now,
       } as File);
       const root_dir = fileRepo.create({
         path: '/',
         owner: admin,
         type: 1,
         permissions: 0o755,
-        atime: now,
-        btime: now,
-        ctime: now,
-        mtime: now,
       } as File);
       const new_user_file = fileRepo.create({
         path: '/create-user.txt',
         owner: admin,
         type: 0,
         permissions: 0o700,
-        atime: now,
-        btime: now,
-        ctime: now,
-        mtime: now,
       });
       const new_group_file = fileRepo.create({
         path: '/create-group.txt',
         owner: admin,
         type: 0,
         permissions: 0o700,
-        atime: now,
-        btime: now,
-        ctime: now,
-        mtime: now,
       });
       fileRepo.save(admin_dir);
       fileRepo.save(root_dir);

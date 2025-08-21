@@ -40,11 +40,7 @@ export class AuthenticationController {
             path: `/${uid}`,
             owner: user,
             type: 1,
-            permissions: 0o755,
-            atime: now,
-            btime: now,
-            ctime: now,
-            mtime: now,
+            permissions: 0o755
         });
         await fileRepo.save(userDir);
 

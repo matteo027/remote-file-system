@@ -21,15 +21,4 @@ export class File {
   @JoinColumn({ name: "group" })
   group: Group;
 
-  @Column()
-  atime: number; // last access time
-
-  @Column()
-  mtime: number; // last modification time
-
-  @Column()
-  ctime: number; // last time that file's metadata (e.g., permissions) was last changed
-
-  @Column()
-  btime: number; // birth time
 }
