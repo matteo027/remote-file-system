@@ -719,7 +719,7 @@ export class FileSystemController {
 
     public getattr = async (req: Request, res: Response) => {
         const dbPath    = normalizePath(req.params.path);
-        const clientTime = Number(req.header('X-Client-Time')) || 0; // time passed by the client, default 0
+        const isModifiedHead = req.header('if-modified-since');
 
         if (dbPath == undefined)
             return res.status(400).json({ error: 'Bad format: path parameter is missing' });
@@ -733,9 +733,21 @@ export class FileSystemController {
                 return res.status(403).json({ error: 'You have not the permission to visualize the file ' + dbPath });
             const stats: Stats = await fs.stat(toFsPath(dbPath));
 
-            if(clientTime > 0 && clientTime >= stats.mtime.getTime()) {
-                return res.status(304).end(); // Not Modified
+            const lastModifiedSecond= Math.floor(stats.mtime.getTime() / 1000);
+
+            if (isModifiedHead){
+                const isModifiedMs = Date.parse(isModifiedHead);
+                if (!Number.isNaN(isModifiedMs)) {
+                    const isModifiedSeconds = Math.floor(isModifiedMs / 1000);
+                    if (lastModifiedSecond <= isModifiedSeconds) {
+                        console.log("File %s not modified since", dbPath,isModifiedHead);
+                        return res.status(304).end(); // Not Modified
+                    }
+                }
             }
+
+            const lastModifiedHttp= new Date(lastModifiedSecond * 1000).toUTCString();
+            res.setHeader('Last-Modified', lastModifiedHttp);
 
             res.status(200).json({
                 ...file,

@@ -3,7 +3,7 @@ use daemonize::Daemonize;
 use fuser::{MountOption};
 use rfs_fuse::RemoteFS;
 //use rfs_fuse_macos::RemoteFS as RemoteFSMacOS;
-use std::{fs::File, sync::{Arc, Condvar, Mutex}};
+use std::{fs::{create_dir_all, File}, sync::{Arc, Condvar, Mutex}};
 use rfs_api::HttpBackend;
 use rfs_cache::Cache;
 use signal_hook::{consts::signal::*, iterator::Signals};
@@ -57,10 +57,9 @@ fn main() {
     let options = vec![
         MountOption::FSName("Remote-FS".to_string()),
         MountOption::RW,
-        MountOption::AutoUnmount,
     ];
 
-    let runtime= Arc::new(Builder::new_multi_thread().enable_all().build().expect("Unable to build a Runtime object"));
+    let runtime= Arc::new(Builder::new_multi_thread().enable_all().thread_name("rfs-runtime").build().expect("Unable to build a Runtime object"));
 
     let http_backend;
     match HttpBackend::new(cli.remote_address.clone(), credentials, sessionid, runtime.clone()) {
@@ -79,14 +78,15 @@ fn main() {
     {
         fs = RemoteFSMacOS::new(cache);
     }
-     
+
+    create_dir_all(&cli.mount_point).expect("mount point does not exist and cannot be created");
     let session = fuser::spawn_mount2(fs, &cli.mount_point, &options).expect("failed to mount");
 
     let pair = Arc::new((Mutex::new(false), Condvar::new()));
     let pair_clone = pair.clone();
 
     let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT, SIGHUP]).expect("Unable to create signals to listen to");
-    thread::spawn(move || {
+    let th=thread::spawn(move || {
         for signal in signals.forever() {
             match signal {
                 SIGINT | SIGTERM | SIGQUIT | SIGHUP => {
@@ -94,10 +94,11 @@ fn main() {
                     let mut stop = lock.lock().unwrap();
                     *stop = true;
                     cvar.notify_one();
-                    println!("\nSignal received. Unmounting...");
+                    println!("\nSignal received");
+                    break;
                 },
                 other => {
-                    eprintln!("Signal not hanlded: {}", other);
+                    eprintln!("Signal not handled: {}", other);
                 }
             }
         }
@@ -111,6 +112,6 @@ fn main() {
     let _stop = cvar.wait_while(lock.lock().unwrap(), |s|{!*s}).expect("Mutex poisoned");
     println!("Unmounting Remote-FS...");
     drop(session);
+    th.join().expect("Thread join failed");
     println!("Remote-FS unmounted correctly");
-    return;
 }

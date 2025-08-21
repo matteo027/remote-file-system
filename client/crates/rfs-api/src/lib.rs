@@ -1,5 +1,6 @@
+use httpdate::fmt_http_date;
 use reqwest::cookie::Jar;
-use reqwest::header::{HeaderValue, CONTENT_TYPE};
+use reqwest::header::{self, HeaderValue, CONTENT_TYPE};
 use reqwest::{Client, Method, Response, StatusCode, Url};
 use rfs_models::{BackendError, FileEntry, RemoteBackend, SetAttrRequest};
 use rpassword::read_password;
@@ -98,7 +99,6 @@ impl Credentials {
                     if resp_login.status() == StatusCode::OK {
                         return Ok((credentials, sid));
                     } 
-                    
                 }
             })
         });
@@ -248,6 +248,21 @@ impl RemoteBackend for HttpBackend {
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request_response::<FileServerResponse, ()>(Method::GET, &endpoint, None)?;
         Ok(response_to_entry(f))
+    }
+
+    fn get_attr_if_modified_since(&self, path: &str, since: SystemTime) -> Result<Option<FileEntry>, BackendError> {
+        let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
+        let url= self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
+        let req=self.client.get(url).header(header::IF_MODIFIED_SINCE, fmt_http_date(since));
+        let resp= self.runtime.block_on(async {req.send().await}).map_err(|e| BackendError::Other(e.to_string()))?;
+        match resp.status() {
+            StatusCode::OK => {
+                let f=self.runtime.block_on(async{resp.json().await}).map_err(|_| BackendError::BadAnswerFormat)?;
+                Ok(Some(response_to_entry(f)))
+            }
+            StatusCode::NOT_MODIFIED => Ok(None),
+            _ => Err(self.decode_error(resp, &endpoint)),
+        }
     }
 
     fn create_file(&self, path: &str) -> Result<FileEntry, BackendError> {

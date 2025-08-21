@@ -68,7 +68,19 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
     fn get_attr(&self, path: &str) -> Result<FileEntry, BackendError> {
         let mut cache = self.attr_cache.lock().unwrap();
         if let Some(entry) = cache.get(path) {
-            return Ok(entry.clone());
+            match self.http_backend.get_attr_if_modified_since(path, entry.mtime) {
+                Ok(Some(updated_entry)) => {
+                    cache.put(path.to_string(), updated_entry.clone());
+                    if let Some(parent) = Path::new(path).parent().and_then(|p| p.to_str()) {
+                        // invalido la cache della directory padre
+                        self.dir_cache.lock().unwrap().pop(parent);
+                    }
+                    // TO DO: INVALIDARE ANCHE TUTTA LA CACHE DEI CHUNK DI FILE
+                    return Ok(updated_entry);
+                },
+                Ok(None) => return Ok(entry.clone()),
+                Err(e) => return Err(e),
+            }
         }
         drop(cache); // Rilascia il lock prima di chiamare il backend
         let entry = self.http_backend.get_attr(path)?;
