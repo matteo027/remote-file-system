@@ -20,6 +20,7 @@ fn map_error(error: &BackendError) -> libc::c_int {
     match error {
         BackendError::NotFound(_) => ENOENT,
         BackendError::Unauthorized => EACCES,
+        BackendError::Forbidden => EACCES,
         BackendError::Conflict(_) => EEXIST,
         BackendError::InternalServerError => EIO,
         BackendError::BadAnswerFormat => EIO,

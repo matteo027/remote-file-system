@@ -282,7 +282,7 @@ export class FileSystemController {
                                 },
                                 body: JSON.stringify({ uid, password })
                             });
-                            const result = await fetchRes.json()
+                            const result = await fetchRes.json();
 
                             if (fetchRes.ok) {
                                 await fs.writeFile(fullFsPath, `User ${uid} created successfully.`);
@@ -444,7 +444,6 @@ export class FileSystemController {
                         body: JSON.stringify({ uid, password })
                     });
                     const result = await fetchRes.json();
-                    console.log("fetchRes:", fetchRes, "result:", result);
 
                     if (fetchRes.ok) {
                         await fs.writeFile(fullFsPath, `User ${uid} created successfully.`);
@@ -661,7 +660,7 @@ export class FileSystemController {
 
         // Da implementare vedendo se il group è esistente e se l'utente ha i permessi per cambiarlo
         if (rawUid !== undefined && rawUid !== null || rawGid !== undefined && rawGid !== null) {
-            return res.status(401).json({ error: 'Changing ownership is not allowed' });
+            return res.status(403).json({ error: 'Changing ownership is not allowed' });
         }
 
         let newPerm: number | undefined;

@@ -58,6 +58,8 @@ pub enum BackendError {
     Unauthorized,
     #[error("Conflict")]
     Conflict(String),
+    #[error("Forbidden")]
+    Forbidden,
     #[error("Internal server error")]
     InternalServerError,
     #[error("Bad answer format")]

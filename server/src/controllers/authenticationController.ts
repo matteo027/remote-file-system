@@ -47,7 +47,7 @@ export class AuthenticationController {
         // clearing the file create-user
         await fs.writeFile('./file-system/create-user.txt', '');
 
-        return res.status(200).end();
+        return res.status(200).json({ message: "User created" });
     }
     // logout
     public logout = async (req: Request, res: Response) => {
@@ -79,7 +79,7 @@ export class AuthenticationController {
         if (req.isAuthenticated())
             return next();
 
-        return res.status(401).json({ message: "not authenticated" });
+        return res.status(401).json({ message: "Not authenticated" });
     }
 
     // new group

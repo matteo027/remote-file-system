@@ -223,6 +223,9 @@ impl HttpBackend {
                     }
                     return Err(BackendError::Unauthorized);
                 },
+                StatusCode::FORBIDDEN => {
+                    return Err(BackendError::Forbidden);
+                },
                 StatusCode::CONFLICT => {
                     let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
                     return Err(BackendError::Conflict(err));
@@ -251,6 +254,9 @@ impl HttpBackend {
                         continue; // retry the request after re-authentication
                     }
                     return Err(BackendError::Unauthorized);
+                },
+                StatusCode::FORBIDDEN => {
+                    return Err(BackendError::Forbidden);
                 },
                 StatusCode::CONFLICT => {
                     let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await.unwrap().error });
@@ -382,6 +388,9 @@ impl RemoteBackend for HttpBackend {
                         continue; // retry the request after re-authentication
                     }
                     return Err(BackendError::Unauthorized);
+                },
+                StatusCode::FORBIDDEN => {
+                    return Err(BackendError::Forbidden);
                 },
                 StatusCode::CONFLICT => {
                     let err = self.runtime.block_on(async { resp.json::<ErrorResponse>().await}).map(|e| e.error).unwrap_or_else(|_| "Conflict".to_string());
