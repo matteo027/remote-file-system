@@ -513,9 +513,8 @@ export class FileSystemController {
             try {
                 const buffer = Buffer.alloc(size);
                 const { bytesRead } = await fd.read(buffer, 0, size, offset);
-                const data = buffer.slice(0, bytesRead).toString('utf-8');
                 console.log("read", bytesRead, "bytes from file", dbPath);
-                res.json(data);
+                res.json(buffer.toString('utf-8', 0, bytesRead));
             } finally {
                 await fd.close();
             }

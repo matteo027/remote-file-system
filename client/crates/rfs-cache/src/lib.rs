@@ -5,9 +5,23 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use rfs_models::ByteStream;
 
-type FileChunkKey = (String, u64, u64); // (path, offset, length)
+type FilePageKey = (String, u64); // (path, page_idx)
+const PAGE_SIZE: usize = 4096; // Dimensione della pagina in byte
 
-// implementato meccanismo di cache on write tranne sulla risoluzione di list_dir dopo una creazione/rimozione
+fn page_index(offset: u64) -> u64 {
+    offset / PAGE_SIZE as u64
+}
+
+fn page_start(idx: u64) -> u64 {
+    idx * PAGE_SIZE as u64
+}
+
+fn pages_span(offset:u64, len:u64) -> (u64, u64) {
+    let start = page_index(offset);
+    let end = page_index(offset + len - 1);
+    (start, end)
+}
+
 
 pub struct Cache <B:RemoteBackend>{
     // chiamata al backend remoto
@@ -17,7 +31,7 @@ pub struct Cache <B:RemoteBackend>{
     // cache tra path e lista di entry del fs, serve per list_dir
     dir_cache: Arc<Mutex<LruCache<String, Vec<FileEntry>>>>,
     // cache tra fileChunk e i dati contenuti
-    file_chunk_cache: Arc<Mutex<LruCache<FileChunkKey, Vec<u8>>>>
+    page_cache: Arc<Mutex<LruCache<FilePageKey, Vec<u8>>>>
 }
 
 impl <B:RemoteBackend> Cache<B> {
@@ -26,7 +40,7 @@ impl <B:RemoteBackend> Cache<B> {
             http_backend,
             attr_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(attr_cap).expect("attr_cap must be non-zero")))),
             dir_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(dir_cap).expect("dir_cap must be non-zero")))),
-            file_chunk_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(file_cap).expect("file_cap must be non-zero")))),
+            page_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(file_cap).expect("file_cap must be non-zero")))),
         }
     }
 }
@@ -38,6 +52,7 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
             return Ok(entries.clone());
         }
         drop(cache); // Rilascia il lock prima di chiamare il backend
+
         let entries = self.http_backend.list_dir(path)?;
 
         // riprendo la lock dopo aver chiamato il backend
@@ -91,10 +106,10 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         }
 
         // Rimuovo anche eventuali chunk di file dalla cache
-        let mut file_chunk_cache = self.file_chunk_cache.lock().unwrap();
-        let keys:Vec<FileChunkKey>=file_chunk_cache.iter().map(|(k,_)|k.clone()).filter(|(p,_,_)| p==path).collect();
+        let mut page_cache = self.page_cache.lock().unwrap();
+        let keys:Vec<FilePageKey>=page_cache.iter().filter_map(|(k,_)| (k.0 == path).then(|| (k.0.clone(), k.1))).collect();
         for key in keys {
-            file_chunk_cache.pop(&key);
+            page_cache.pop(&key);
         }
         Ok(())
     }
@@ -106,34 +121,62 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
             // invalido la cache della directory padre
             self.dir_cache.lock().unwrap().pop(parent);
         }
+        let mut page_cache=self.page_cache.lock().unwrap();
+        let to_remove: Vec<FilePageKey> = page_cache.iter().filter_map(|(k,_)| (k.0==path).then(|| (k.0.clone(), k.1))).collect();
+        for k in to_remove{ 
+            page_cache.pop(&k);
+        }
         Ok(())
     }
 
     fn read_chunk(&self, path: &str, offset: u64, size: u64)-> Result<Vec<u8>, BackendError> {
-        let key = (path.to_string(), offset, size);
-        let mut cache = self.file_chunk_cache.lock().unwrap();
-        if let Some(data) = cache.get(&key) {
-            return Ok(data.clone());
+        if size==0 { return Ok(Vec::new())}
+        let mut out=Vec::with_capacity(size as usize);
+        let (first, last) = pages_span(offset, size);
+        let mut remaning = size as usize;
+        for idx in first..=last {
+            let page_off=page_start(idx);
+            let maybe=self.page_cache.lock().unwrap().get(&(path.to_string(), idx)).cloned();
+            let page=if let Some(data) = maybe {
+                data
+            }else{
+                // Se il chunk non è in cache, lo leggo dal backend e lo metto
+                let data= self.http_backend.read_chunk(path, page_off, PAGE_SIZE as u64)?;
+                self.page_cache.lock().unwrap().put((path.to_string(), idx), data.clone());
+                data
+            };
+
+            let start_in_page = if idx==first { 
+                (offset - page_off) as usize 
+            } else { 
+                0 
+            };
+            if start_in_page >= page.len() {break};
+            let avail = page.len() - start_in_page;
+            let take = remaning.min(avail);
+            out.extend_from_slice(&page[start_in_page..start_in_page + take]);
+            remaning -= take;
+            if remaning == 0 { break; }
         }
-        drop(cache); // Rilascia il lock prima di chiamare il backend
-        let data = self.http_backend.read_chunk(path, offset, size)?;
-        // riprendo la lock dopo aver chiamato il backend
-        self.file_chunk_cache.lock().unwrap().put(key, data.clone());
-        Ok(data)
+        Ok(out)
     }
 
+    //write invalida solo la cache, sarà la read ssuccessiva a caricarla in cache se necessario
     fn write_chunk(&self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
         let n = self.http_backend.write_chunk(path, offset, data.clone())?;
+        println!("writing chunk {} at offset {} with size {}", path, offset, n);
         self.attr_cache.lock().unwrap().pop(path); // invalido la cache degli attributi
-
-        //Invalido la cache di ciò che era stato scritto in precedenza
-        let mut file_cache = self.file_chunk_cache.lock().unwrap();
-        let keys: Vec<FileChunkKey> = file_cache.iter().map(|(k, _)| k.clone()).filter(|(p, off, sz)| p == path && *off < offset + n && offset < *off + *sz as u64).collect();
-        for key in keys {
-            file_cache.pop(&key);
+        if let Some(parent) = Path::new(path).parent().and_then(|p| p.to_str()) {
+            // invalido la cache della directory padre
+            self.dir_cache.lock().unwrap().pop(parent);
         }
-        // Aggiungo il nuovo chunk scritto nella cache
-        file_cache.put((path.to_string(), offset, n), data);
+        // invalida tutte le pagine con idx > offset
+        let start_idx=page_index(offset);
+        let mut pc = self.page_cache.lock().unwrap();
+        let to_remove: Vec<FilePageKey>= pc.iter().filter_map(|(k,_)| (k.0==path && k.1 >=start_idx).then(|| (k.0.clone(),k.1))).collect();
+        for k in to_remove{
+            pc.pop(&k);
+        }
         Ok(n)
     }
 
@@ -141,6 +184,7 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         let entry = self.http_backend.rename(old_path, new_path)?;
         // Invalido la cache degli attributi per il vecchio e nuovo path
         self.attr_cache.lock().unwrap().pop(old_path);
+        self.attr_cache.lock().unwrap().put(new_path.to_string(), entry.clone());
 
         for p in [old_path, new_path] {
             if let Some(parent) = Path::new(p).parent().and_then(|p| p.to_str()) {
@@ -150,18 +194,30 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         }
 
         // Invalido la cache dei chunk di file
-        let mut file_cache = self.file_chunk_cache.lock().unwrap();
-        let keys: Vec<FileChunkKey> = file_cache.iter().map(|(k, _)| k.clone()).filter(|(p, _, _)| p == old_path).collect();
-        for key in keys {
+        let mut file_cache = self.page_cache.lock().unwrap();
+        let to_remove: Vec<FilePageKey> = file_cache.iter().map(|(k, _)| k.clone()).filter(|(p, _)| p == old_path).collect();
+        for key in to_remove {
             file_cache.pop(&key);
         }
         Ok(entry)
     }
 
     fn set_attr(&self, path: &str, attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
-        let entry = self.http_backend.set_attr(path, attrs)?;
+        let entry = self.http_backend.set_attr(path, attrs.clone())?;
+        if let Some(parent) = Path::new(path).parent().and_then(|p| p.to_str()) {
+            // invalido la cache della directory padre
+            self.dir_cache.lock().unwrap().pop(parent);
+        }
         // put fa già override sulla cache
         self.attr_cache.lock().unwrap().put(path.to_string(), entry.clone());
+        if let Some(new_size) = attrs.size{
+            let first_drop=page_index(new_size as u64);
+            let mut pc=self.page_cache.lock().unwrap();
+            let to_remove: Vec<FilePageKey>=pc.iter().filter_map(|(k,_)| (k.0==path && k.1 >=first_drop).then(|| (k.0.clone(),k.1))).collect();
+            for k in to_remove{
+                pc.pop(&k);
+            }
+        }
         Ok(entry)
     }
 
