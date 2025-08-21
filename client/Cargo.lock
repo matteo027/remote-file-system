@@ -1093,7 +1093,6 @@ name = "rfs-api"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "futures-util",
  "reqwest",
  "rfs-models",
  "rpassword",
@@ -1133,7 +1132,6 @@ name = "rfs-fuse"
 version = "0.1.0"
 dependencies = [
  "fuser",
- "futures-util",
  "libc",
  "rfs-models",
  "tokio",
