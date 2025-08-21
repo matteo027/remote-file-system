@@ -49,7 +49,6 @@ pub struct HttpBackend {
     runtime: Arc<Runtime>, // from tokio, used to manage async calls
     base_url: Url,
     client: Client,
-    cookie_jar: Arc<Jar>,
     credentials: Credentials
 }
 
@@ -157,7 +156,6 @@ impl HttpBackend {
             runtime: rt,
             base_url,
             client,
-            cookie_jar,
             credentials
         };
 

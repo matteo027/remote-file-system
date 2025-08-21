@@ -13,7 +13,7 @@ use tokio::runtime::Builder;
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
 struct Cli {
-    #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
+    #[arg(short, long, default_value = "/home/andrea/mnt/remote")]
     mount_point: String,
 
     #[arg(short, long, default_value = "http://localhost:3000")]
@@ -103,8 +103,8 @@ fn main() {
         }
     });
 
-    eprintln!("Remote-FS mounted on {}", cli.mount_point);
-    eprintln!("Remote address: {}", cli.remote_address);
+    println!("Remote-FS mounted on {}", cli.mount_point);
+    println!("Remote address: {}", cli.remote_address);
 
     // waits for the signal
     let (lock, cvar) = &*pair;
@@ -112,9 +112,6 @@ fn main() {
     stop = cvar.wait_while(stop, |s|{!*s}).expect("Mutex poisoned");
 
     drop(session);
-    eprintln!("Remote-FS unmounted correctly");
-    eprintln!("Remote-FS mounted at {}", cli.mount_point);
-    eprintln!("Remote address: {}", cli.remote_address);
-
+    println!("Remote-FS unmounted correctly");
     return;
 }
