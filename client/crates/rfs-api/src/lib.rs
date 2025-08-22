@@ -223,19 +223,19 @@ impl HttpBackend {
 }
 
 impl RemoteBackend for HttpBackend {
-    fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
+    fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let files: Vec<FileServerResponse> = self.request_response::<Vec<FileServerResponse>, ()>(Method::GET, &endpoint, None)?;
         Ok(files.into_iter().map(response_to_entry).collect())
     }
 
-    fn create_dir(&self, path: &str) -> Result<FileEntry, BackendError> {
+    fn create_dir(&mut self, path: &str) -> Result<FileEntry, BackendError> {
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request_response::<FileServerResponse, ()>(Method::POST, &endpoint, None)?;
         Ok(response_to_entry(f))
     }
 
-    fn delete_dir(&self, path: &str) -> Result<(), BackendError> {
+    fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
         let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
         let resp=self.raw_request::<()>(Method::DELETE, &endpoint,None)?;
         match resp.status(){
@@ -244,13 +244,13 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn get_attr(&self, path: &str) -> Result<FileEntry, BackendError> {
+    fn get_attr(&mut self, path: &str) -> Result<FileEntry, BackendError> {
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request_response::<FileServerResponse, ()>(Method::GET, &endpoint, None)?;
         Ok(response_to_entry(f))
     }
 
-    fn get_attr_if_modified_since(&self, path: &str, since: SystemTime) -> Result<Option<FileEntry>, BackendError> {
+    fn get_attr_if_modified_since(&mut self, path: &str, since: SystemTime) -> Result<Option<FileEntry>, BackendError> {
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let url= self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req=self.client.get(url).header(header::IF_MODIFIED_SINCE, fmt_http_date(since));
@@ -265,13 +265,13 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn create_file(&self, path: &str) -> Result<FileEntry, BackendError> {
+    fn create_file(&mut self, path: &str) -> Result<FileEntry, BackendError> {
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         let f: FileServerResponse = self.request_response::<FileServerResponse, ()>(Method::POST, &endpoint, None)?;
         Ok(response_to_entry(f))
     }
 
-    fn delete_file(&self, path: &str) -> Result<(), BackendError> {
+    fn delete_file(&mut self, path: &str) -> Result<(), BackendError> {
         let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
         let resp=self.raw_request::<()>(Method::DELETE, &endpoint, None)?;
         match resp.status(){
@@ -280,7 +280,7 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn read_chunk(&self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
+    fn read_chunk(&mut self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
         println!("Reading chunk from path: {}, offset: {}, size: {}", path, offset, size);
         let endpoint = format!("api/files/{}?offset={}&size={}", path.trim_start_matches('/'), offset, size);
         let resp= self.raw_request::<()>(Method::GET, &endpoint, None)?;
@@ -295,7 +295,7 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn write_chunk(&self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
+    fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
         let endpoint = format!("api/files/{}?offset={}", path.trim_start_matches('/'), offset);
         let url= self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req=self.client.request(Method::PUT, url).header(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream")).body(data);
@@ -309,21 +309,21 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn rename(&self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
+    fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
         let endpoint = format!("api/files/{}", old_path.trim_start_matches('/'));
         let body = serde_json::json!({ "new_path": new_path.trim_start_matches('/') });
         let f: FileServerResponse = self.request_response::<FileServerResponse, Value>(Method::PATCH, &endpoint, Some(&body))?;
         Ok(response_to_entry(f))
     }
 
-    fn set_attr(&self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
+    fn set_attr(&mut self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
         let body = serde_json::to_value(attrs).map_err(|e| BackendError::Other(e.to_string()))?;
         let f: FileServerResponse = self.request_response::<FileServerResponse, Value>(Method::PATCH, &endpoint, Some(&body))?;
         Ok(response_to_entry(f))
     }
 
-    fn read_stream(&self, path: &str, offset: u64) -> Result<rfs_models::ByteStream, BackendError> {
+    fn read_stream(&mut self, path: &str, offset: u64) -> Result<rfs_models::ByteStream, BackendError> {
         let endpoint = format!("api/files/stream/{}?offset={}", path.trim_start_matches('/'), offset);
         let resp= self.raw_request::<()>(Method::GET, &endpoint, None)?;
         match resp.status() {
