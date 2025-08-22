@@ -10,6 +10,6 @@ serde_json = "1.0.141"
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.46.1", features = ["rt-multi-thread", "macros"] }
 tokio-stream = "0.1.17"
-futures-util = "0.3.31"
 bytes = "1.10.1"
 rpassword = "7.4.0"
+httpdate = "1.0.3"

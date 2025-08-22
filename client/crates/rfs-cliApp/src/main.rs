@@ -3,7 +3,7 @@ use daemonize::Daemonize;
 use fuser::{MountOption};
 use rfs_fuse::RemoteFS;
 //use rfs_fuse_macos::RemoteFS as RemoteFSMacOS;
-use std::{fs::File, sync::{Arc, Condvar, Mutex}};
+use std::{fs::{create_dir_all, File}, sync::{Arc, Condvar, Mutex}};
 use rfs_api::HttpBackend;
 use rfs_cache::Cache;
 use signal_hook::{consts::signal::*, iterator::Signals};
@@ -13,7 +13,7 @@ use tokio::runtime::Builder;
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
 struct Cli {
-    #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
+    #[arg(short, long, default_value = "/home/andrea/mnt/remote")]
     mount_point: String,
 
     #[arg(short, long, default_value = "http://localhost:3000")]
@@ -59,7 +59,7 @@ fn main() {
         MountOption::RW,
     ];
 
-    let runtime= Arc::new(Builder::new_multi_thread().enable_all().build().expect("Unable to build a Runtime object"));
+    let runtime= Arc::new(Builder::new_multi_thread().enable_all().thread_name("rfs-runtime").build().expect("Unable to build a Runtime object"));
 
     let http_backend;
     match HttpBackend::new(cli.remote_address.clone(), credentials, sessionid, runtime.clone()) {
@@ -78,15 +78,15 @@ fn main() {
     {
         fs = RemoteFSMacOS::new(cache);
     }
-     
-    let session = fuser::spawn_mount2(fs, &cli.mount_point, &options)
-        .expect("failed to mount");
+
+    create_dir_all(&cli.mount_point).expect("mount point does not exist and cannot be created");
+    let session = fuser::spawn_mount2(fs, &cli.mount_point, &options).expect("failed to mount");
 
     let pair = Arc::new((Mutex::new(false), Condvar::new()));
     let pair_clone = pair.clone();
 
     let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT, SIGHUP]).expect("Unable to create signals to listen to");
-    thread::spawn(move || {
+    let th=thread::spawn(move || {
         for signal in signals.forever() {
             match signal {
                 SIGINT | SIGTERM | SIGQUIT | SIGHUP => {
@@ -94,27 +94,24 @@ fn main() {
                     let mut stop = lock.lock().unwrap();
                     *stop = true;
                     cvar.notify_one();
-                    eprintln!("\nSignal received. Unmounting...");
+                    println!("\nSignal received");
+                    break;
                 },
                 other => {
-                    eprintln!("Signal not hanlded: {}", other);
+                    eprintln!("Signal not handled: {}", other);
                 }
             }
         }
     });
 
-    eprintln!("Remote-FS mounted on {}", cli.mount_point);
-    eprintln!("Remote address: {}", cli.remote_address);
+    println!("Remote-FS mounted on {}", cli.mount_point);
+    println!("Remote address: {}", cli.remote_address);
 
     // waits for the signal
     let (lock, cvar) = &*pair;
-    let mut stop = lock.lock().unwrap();
-    stop = cvar.wait_while(stop, |s|{!*s}).expect("Mutex poisoned");
-
+    let _stop = cvar.wait_while(lock.lock().unwrap(), |s|{!*s}).expect("Mutex poisoned");
+    println!("Unmounting Remote-FS...");
     drop(session);
-    eprintln!("Remote-FS unmounted correctly");
-    eprintln!("Remote-FS mounted at {}", cli.mount_point);
-    eprintln!("Remote address: {}", cli.remote_address);
-
-    return;
+    th.join().expect("Thread join failed");
+    println!("Remote-FS unmounted correctly");
 }
