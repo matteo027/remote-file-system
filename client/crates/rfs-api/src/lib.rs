@@ -94,9 +94,9 @@ impl Credentials {
                         .map_err(|e| BackendError::Other(e.to_string()))?;
 
                     println!("[auth] login status: {:?}", resp_login.status());
-                    let sid = resp_login.cookies().find(|c| c.name() == "connect.sid").map(|c| c.value().to_string()).ok_or_else(|| BackendError::Other("Missing session cookie 'connect.sid'".into()))?;
 
                     if resp_login.status() == StatusCode::OK {
+                        let sid = resp_login.cookies().find(|c| c.name() == "connect.sid").map(|c| c.value().to_string()).ok_or_else(|| BackendError::Other("Missing session cookie 'connect.sid'".into()))?;
                         return Ok((credentials, sid));
                     } 
                 }
@@ -252,16 +252,24 @@ impl RemoteBackend for HttpBackend {
 
     fn get_attr_if_modified_since(&mut self, path: &str, since: SystemTime) -> Result<Option<FileEntry>, BackendError> {
         let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
-        let url= self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
-        let req=self.client.get(url).header(header::IF_MODIFIED_SINCE, fmt_http_date(since));
-        let resp= self.runtime.block_on(async {req.send().await}).map_err(|e| BackendError::Other(e.to_string()))?;
-        match resp.status() {
-            StatusCode::OK => {
-                let f=self.runtime.block_on(async{resp.json().await}).map_err(|_| BackendError::BadAnswerFormat)?;
-                Ok(Some(response_to_entry(f)))
+        let mut retried = false;
+        loop {
+            let url = self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
+            let req = self.client.get(url).header(header::IF_MODIFIED_SINCE, fmt_http_date(since));
+            let resp = self.runtime.block_on(async { req.send().await }).map_err(|e| BackendError::Other(e.to_string()))?;
+            match resp.status() {
+                StatusCode::OK => {
+                    let f = self.runtime.block_on(async { resp.json().await }).map_err(|_| BackendError::BadAnswerFormat)?;
+                    return Ok(Some(response_to_entry(f)));
+                }
+                StatusCode::NOT_MODIFIED => return Ok(None),
+                StatusCode::UNAUTHORIZED if !retried => {
+                    self.authenticate()?;
+                    retried = true;
+                    continue;
+                }
+                _ => return Err(self.decode_error(resp, &endpoint)),
             }
-            StatusCode::NOT_MODIFIED => Ok(None),
-            _ => Err(self.decode_error(resp, &endpoint)),
         }
     }
 
