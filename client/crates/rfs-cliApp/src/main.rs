@@ -13,11 +13,14 @@ use tokio::runtime::Builder;
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
 struct Cli {
-    #[arg(short, long, default_value = "/home/andrea/mnt/remote")]
+    #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
     mount_point: String,
 
     #[arg(short, long, default_value = "http://localhost:3000")]
     remote_address: String,
+
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    speed_testing: bool,
 }
 
 fn main() {
@@ -34,11 +37,15 @@ fn main() {
     };
     eprintln!("Authentication successful.");
 
-
+    
     #[cfg(target_os = "linux")]
     {
         let stdout = File::create("/tmp/remote-fs.out").unwrap();
         let stderr = File::create("/tmp/remote-fs.err").unwrap();
+        if cli.speed_testing {
+            println!("Speed testing mode enabled.");
+            let speed = File::create("/tmp/remote-fs.speed-test.out").unwrap();
+        }
         let daemonize = Daemonize::new()
             .pid_file("/tmp/remote-fs.pid") // saves PID
             .stdout(stdout) // log stdout
@@ -72,7 +79,13 @@ fn main() {
     let fs;
     #[cfg(target_os = "linux")]
     {
-        fs = RemoteFS::new(cache, runtime.clone());
+        let speed_file = if cli.speed_testing {
+            Some(File::create("/tmp/remote-fs.speed-test.out").unwrap())
+        } else {
+            None
+        };
+
+        fs = RemoteFS::new(cache, runtime.clone(), cli.speed_testing, speed_file);
     }
     #[cfg(target_os = "macos")]
     {

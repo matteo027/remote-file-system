@@ -2,11 +2,7 @@ use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, R
 use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream};
 use libc::{EBADF, EILSEQ, EINVAL, ENOENT, ESTALE};
 use std::{
-    ffi::OsStr,
-    collections::HashMap,
-    sync::Arc,
-    path::{Path, PathBuf},
-    time::{Duration, SystemTime},
+    collections::HashMap, ffi::OsStr, fs::File, path::{Path, PathBuf}, sync::Arc, time::{self, Duration, Instant, SystemTime}
 };
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
@@ -74,19 +70,28 @@ pub struct RemoteFS<B: RemoteBackend> {
     nlookup: HashMap<u64, u64>, //tiene riferimento al numero di riferimenti di naming per uno specifico inode, per gestire il caso di lookup multipli
     next_fh: u64, // file handle da allocare
     file_handles: HashMap<u64, ReadMode>, // mappa file handle, per gestire read in streaming continuo su file già aperti
+    speed_testing: bool,
+    speed_file: Option<File>,
 }
 
 impl<B: RemoteBackend> RemoteFS<B> {
-    pub fn new(backend: B, runtime: Arc<Runtime>) -> Self {
+    pub fn new(
+        backend: B,
+        runtime: Arc<Runtime>,
+        speed_testing: bool,
+        speed_file: Option<File>,
+    ) -> Self {
         Self {
             backend,
             rt: runtime,
-            next_ino: ROOT_INO + 1, // il primo inode disponibile è ROOT_INO + 1
+            next_ino: ROOT_INO + 1,
             path_to_ino: HashMap::new(),
             ino_to_path: HashMap::new(),
             nlookup: HashMap::new(),
-            next_fh: 1, // il primo file handle è 1
+            next_fh: 1,
             file_handles: HashMap::new(),
+            speed_testing,
+            speed_file,
         }
     }
 
@@ -137,18 +142,41 @@ impl<B: RemoteBackend> RemoteFS<B> {
 
 impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
     fn init(&mut self,_req: &Request<'_>,_config: &mut fuser::KernelConfig) -> Result<(), libc::c_int> {
+        
+        let timer_start = Instant::now();
+        
         self.path_to_ino.insert(PathBuf::from("/"), ROOT_INO);
         self.ino_to_path.insert(ROOT_INO, PathBuf::from("/"));
         self.nlookup.insert(ROOT_INO, 1); // inizializza il numero di lookup per la root
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] init duration: {:?}", duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] init duration: {:?}", duration).ok();
+            }
+        }
+
         Ok(())
     }
 
     fn destroy(&mut self) {
+        let timer_start = Instant::now();
         // pulizia finale, se necessaria
         println!("Fuse layer destroyed.");
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] destroy duration: {:?}", duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] destroy duration: {:?}", duration).ok();
+            }
+        }
     }
 
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        let timer_start = Instant::now();
         let Some(dir)=self.inode_to_path(parent) else{
             reply.error(ESTALE);
             return;
@@ -171,9 +199,18 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         let attr=self.entry_to_attr(ino, &metadata);
         self.bump_lookup(ino); // incrementa il numero di lookup per questo inode
         reply.entry(&TTL, &attr, 0);
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] lookup of {} duration: {:?}", full.display(), duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] lookup of {} duration: {:?}", full.display(), duration).ok();
+            }
+        }
     }
 
     fn forget(&mut self, _req: &Request<'_>, ino: u64, nlookup: u64) {
+        let timer_start = Instant::now();
         if ino == ROOT_INO {
             // Non dimentichiamo mai la root
             return;
@@ -188,9 +225,19 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 }
             }
         }
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] forget of {} duration: {:?}", ino, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] forget of {} duration: {:?}", ino, duration).ok();
+            }
+        }
     }
 
     fn getattr(&mut self, _req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
+        let timer_start = Instant::now();
         //fh serve poi quando si fa read/write
         let Some(path) = self.inode_to_path(ino) else {
             reply.error(ENOENT);
@@ -210,9 +257,20 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
             Err(e) => reply.error(map_error(&e)),
         }
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] getattr of {} duration: {:?}", path_str, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] getattr of {} duration: {:?}", path_str, duration).ok();
+            }
+        }
     }
 
     fn readdir(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,mut reply: ReplyDirectory) {
+        let timer_start = Instant::now();
+
         let Some(dir)=self.inode_to_path(ino) else {
             reply.error(ESTALE);
             return;
@@ -261,9 +319,20 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
 
         reply.ok();
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] readdir of {} duration: {:?}", dir_str, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] readdir of {} duration: {:?}", dir_str, duration).ok();
+            }
+        }
     }
 
     fn create(&mut self,_req: &Request<'_>, parent: u64,name: &OsStr,_mode: u32,_umask: u32,_flags: i32,reply: ReplyCreate,) {
+        let timer_start = Instant::now();
+
         let Some(dir) = self.inode_to_path(parent) else {
             reply.error(ESTALE);
             return;
@@ -288,9 +357,20 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
             Err(e) => reply.error(map_error(&e)),
         }
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] create of {} duration: {:?}", path_str, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] create of {} duration: {:?}", path_str, duration).ok();
+            }
+        }
     }
 
     fn mkdir(&mut self,_req: &Request<'_>,parent: u64,name: &OsStr,_mode: u32,_umask: u32,reply: ReplyEntry) {
+        let timer_start = Instant::now();
+        
         let Some(dir) = self.inode_to_path(parent) else {
             reply.error(ESTALE);
             return;
@@ -312,9 +392,20 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
             Err(e) => reply.error(map_error(&e)),
         }
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] mkdir of {} duration: {:?}", path_str, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] mkdir of {} duration: {:?}", path_str, duration).ok();
+            }
+        }
     }
 
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        let timer_start = Instant::now();
+        
         let Some(dir) = self.inode_to_path(parent) else {
             reply.error(ESTALE);
             return;
@@ -337,9 +428,20 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
             Err(e) => reply.error(map_error(&e)),
         }
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] unlink of {} duration: {:?}", path_str, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] unlink of {} duration: {:?}", path_str, duration).ok();
+            }
+        }
     }
 
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        let timer_start = Instant::now();
+
         let Some(dir)= self.inode_to_path(parent) else {
             reply.error(ESTALE);
             return;
@@ -362,9 +464,20 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
             Err(e) => reply.error(map_error(&e)),
         }
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] rmdir of {} duration: {:?}", path_str,duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] rmdir of {} duration: {:?}", path_str,duration).ok();
+            }
+        }
     }
 
     fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
+        let timer_start = Instant::now();
+
         let Some(path) = self.inode_to_path(ino) else {
             reply.error(ENOENT);
             return;
@@ -415,9 +528,20 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         self.file_handles.insert(fh, mode);
         // Siccome abbiamo un layer di cache apposito disabilitiamo quello del kernel con direct io
         reply.opened(fh, fuser::consts::FOPEN_DIRECT_IO); //FOPEN_KEEP_CACHE se vogliamo mantenere la cache del kernel
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] open of {} duration: {:?}", path_str, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] open of {} duration: {:?}", path_str, duration).ok();
+            }
+        }
     }
 
     fn read(&mut self,_req: &Request<'_>,ino: u64,fh: u64,offset: i64,size: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyData,) {
+        let timer_start = Instant::now();
+        
         if offset < 0 {
             reply.error(EINVAL);
             return;
@@ -500,15 +624,36 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 }
             },
         }
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] read of {} at offset {} with size {} duration: {:?}", path_str, offset, size, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] read of {} at offset {} with size {} duration: {:?}", path_str, offset, size, duration).ok();
+            }
+        }
     }
 
     fn release(&mut self, _req: &Request<'_>, _ino: u64, fh: u64, _flags: i32, _lock_owner: Option<u64>, _flush: bool, reply: ReplyEmpty) {
+        let timer_start = Instant::now();
         // Rimuoviamo il file handle dalla mappa, basta per fare drop automatico della stream e chiuderla immediatamente
         self.file_handles.remove(&fh);
         reply.ok();
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] release of file handle {} duration: {:?}", fh, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] release of file handle {} duration: {:?}", fh, duration).ok();
+            }
+        }
     }
 
     fn write(&mut self,_req: &Request<'_>,ino: u64,_fh: u64,offset: i64,data: &[u8],_write_flags: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyWrite,) {
+        let timer_start = Instant::now();
+        
         let Some(path) = self.inode_to_path(ino) else{
             reply.error(ENOENT);
             return;
@@ -525,9 +670,20 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             Ok(bytes_written) => reply.written(bytes_written as u32),
             Err(e) => reply.error(map_error(&e)),
         }
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] write of {} at offset {} with size {} duration: {:?}", path_str, offset, data.len(), duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] write of {} at offset {} with size {} duration: {:?}", path_str, offset, data.len(), duration).ok();
+            }
+        }
     }
 
     fn rename(&mut self,_req: &Request<'_>,parent: u64,name: &OsStr,new_parent: u64,new_name: &OsStr,_flags: u32,reply: ReplyEmpty,) {
+        let timer_start = Instant::now();
+
         let Some(old_dir)=self.inode_to_path(parent) else {
             reply.error(ESTALE);
             return;
@@ -573,11 +729,20 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 if let Some(ino) = self.path_to_ino.remove(&old_path) {
                     self.ino_to_path.remove(&ino);
                     self.path_to_ino.insert(new_path.clone(), ino);
-                    self.ino_to_path.insert(ino, new_path);
+                    self.ino_to_path.insert(ino, new_path.clone());
                 }
                 reply.ok();
             }
             Err(e) => reply.error(map_error(&e)),
+        }
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] rename from {} to {} duration: {:?}", old_path_str, new_path_str, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] rename from {} to {} duration: {:?}", old_path_str, new_path_str, duration).ok();
+            }
         }
     }
 
@@ -599,6 +764,8 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         flags: Option<u32>,
         reply: ReplyAttr,
     ) {
+        let timer_start = Instant::now();
+
         let Some(path)= self.inode_to_path(ino) else {
             reply.error(ENOENT);
             return;
@@ -627,10 +794,29 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
             Err(e) => reply.error(map_error(&e)),
         }
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            println!("[speed] setattr of {} duration: {:?}", path_str, duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] setattr of {} duration: {:?}", path_str, duration).ok();
+            }
+        }
     }
 
     fn flush(&mut self,_req: &Request<'_>,_ino: u64,_fh: u64,_lock_owner: u64,reply: ReplyEmpty) {
+        let start = Instant::now();
         // Non facciamo nulla di particolare al flush per ora, CONTROLLARE SE SERVE PIÙ AVANTI
         reply.ok();
+
+        if self.speed_testing {
+            let duration = start.elapsed();
+            println!("[speed] flush duration: {:?}", duration);
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] flush duration: {:?}", duration).ok();
+            }
+        }
     }
 }
