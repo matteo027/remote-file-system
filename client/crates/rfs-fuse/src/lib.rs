@@ -1,6 +1,6 @@
 use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
 use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream};
-use libc::{EBADF, EILSEQ, EINVAL, ENOENT, ESTALE};
+use libc::{EAGAIN, EBADF, EILSEQ, EINVAL, ENOENT, ESTALE};
 use std::{
     collections::HashMap, ffi::OsStr, fs::File, path::{Path, PathBuf}, sync::Arc, time::{Duration, Instant, SystemTime}
 };
@@ -10,6 +10,7 @@ use tokio_stream::StreamExt;
 const TTL: Duration = Duration::from_secs(1);
 const ROOT_INO: u64 = 1;
 
+const FOPEN_NONSEEKABLE: u32 = 1 << 2; //bit per settare nonseekable flag (controllare meglio abi, non viene codificato in fuser)
 const LARGE_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
 
 fn map_error(error: &BackendError) -> libc::c_int {
@@ -54,6 +55,19 @@ struct StreamState{
     pos: u64,
     buffer: Vec<u8>,
     stream: Option<ByteStream>,
+    eof: bool,
+}
+
+impl StreamState{
+    fn new(path: String)->Self{
+        Self{
+            path,
+            pos: 0,
+            buffer: Vec::new(),
+            stream: None,
+            eof: false,
+        }
+    }
 }
 
 enum ReadMode{
@@ -88,7 +102,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
             path_to_ino: HashMap::new(),
             ino_to_path: HashMap::new(),
             nlookup: HashMap::new(),
-            next_fh: 1,
+            next_fh: 3, //0,1,2 di solito sono assegnati, da controllare
             file_handles: HashMap::new(),
             speed_testing,
             speed_file,
@@ -512,22 +526,20 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 return;
             }
         };
-
+        
+        let fuse_flags;
         let mode = if size > LARGE_FILE_SIZE {
-            ReadMode::LargeStream(StreamState {
-                path: path_str.to_string(),
-                pos: 0,
-                buffer: Vec::new(),
-                stream: None,
-            })
+            fuse_flags= fuser::consts::FOPEN_DIRECT_IO | FOPEN_NONSEEKABLE; // bisognerebbe abilitare flag stream e nonseekable ma non sono definiti in fuser
+            ReadMode::LargeStream(StreamState::new(path_str.to_string()))
         } else {
+            fuse_flags= fuser::consts::FOPEN_KEEP_CACHE; // mantiene la cache anche a livello di kernel per file piccoli
             ReadMode::SmallPages
         };
         let fh= self.next_fh;
         self.next_fh += 1;
         self.file_handles.insert(fh, mode);
         // Siccome abbiamo un layer di cache apposito disabilitiamo quello del kernel con direct io
-        reply.opened(fh, fuser::consts::FOPEN_DIRECT_IO); //FOPEN_KEEP_CACHE se vogliamo mantenere la cache del kernel
+        reply.opened(fh, fuse_flags); //FOPEN_KEEP_CACHE se vogliamo mantenere la cache del kernel
 
         if self.speed_testing {
             let duration = timer_start.elapsed();
@@ -539,8 +551,13 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    fn read(&mut self,_req: &Request<'_>,ino: u64,fh: u64,offset: i64,size: u32,_flags: i32,_lock_owner: Option<u64>,reply: ReplyData,) {
+    fn read(&mut self,_req: &Request<'_>,ino: u64,fh: u64,offset: i64,size: u32,flags: i32,_lock_owner: Option<u64>,reply: ReplyData,) {
         let timer_start = Instant::now();
+
+        if size == 0 { //come se avessi letto eof
+            reply.data(&[]);
+            return;
+        }
         
         if offset < 0 {
             reply.error(EINVAL);
@@ -560,34 +577,19 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
         };
 
-
-        let file_size = match self.backend.get_attr(&path_str) {
-            Ok(entry) => entry.size as u64,
-            Err(e) => {
-                reply.error(map_error(&e));
-                return;
-            }
-        };
-
         let Some(mut handle) = self.file_handles.get_mut(&fh) else {
             reply.error(EBADF); // File handle non trovato
             return;
         };
-
-        let off = offset as u64;
-        if off >= file_size {
-            return reply.data(&[]); // Se l'offset è oltre la fine del file, ritorniamo un array vuoto
-        }
-        let need= (size as u64).min(file_size - off) as usize;
         
         match &mut handle {
             ReadMode::LargeStream(state) => {
-                if state.stream.is_none() || state.pos != off {
-                    match self.backend.read_stream(&state.path, off) {
+                let need= size as usize;
+                if state.stream.is_none() && !state.eof {
+                    match self.backend.read_stream(&state.path, state.pos) {
                         Ok(stream) => {
                             state.stream = Some(stream);
                             state.buffer.clear(); // Pulisci il buffer per il nuovo stream
-                            state.pos = off;
                         }
                         Err(e) => {
                             reply.error(map_error(&e));
@@ -596,34 +598,45 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                     }
                 }
 
-                while state.buffer.len() < need {
-                    let s = match state.stream.as_mut() {
-                        Some(s) => s,
-                        None    => break, // stream assente → consegna quello che hai
-                    };
-                    let next = self.rt.block_on(async { s.next().await });
+                while state.buffer.len() < need && !state.eof {
+                    let Some(stream)=state.stream.as_mut() else {break};
+                    let next = self.rt.block_on(async { stream.next().await });
                     match next {
-                        Some(Ok(bytes)) => {
-                            state.buffer.extend_from_slice(&bytes);
-                            println!("[stream] read of {} at offset {} with size {}", path_str, offset, size);
+                        Some(Ok(bytes))=> {
+                            if !bytes.is_empty() {
+                                state.buffer.extend_from_slice(&bytes);
+                                println!("[stream] read of {} at offset {} with size {}", path_str, offset, size);
+                            }
                         },
-                        Some(Err(e))    => { reply.error(map_error(&e)); return; }
+                        Some(Err(e)) => { reply.error(map_error(&e)); return; }
                         None => { // EOF server side
                             println!("[stream] EOF reached for {} at offset {}", path_str, offset);
+                            state.eof = true;
                             break;
                         }
                     }
                 }
 
+                if state.buffer.is_empty() {
+                    if !state.eof  && (flags & libc::O_NONBLOCK) != 0 {
+                        reply.error(EAGAIN);
+                    }
+                    else {
+                        reply.data(&[]);
+                    }
+                    return;
+                }
+
                 let take = need.min(state.buffer.len());
-                let out  = state.buffer.drain(..take).collect::<Vec<u8>>();
+                let out:Vec<u8>  = state.buffer.drain(..take).collect();
                 state.pos = state.pos.saturating_add(take as u64);
                 reply.data(&out);
             }
             ReadMode::SmallPages => {
-                match self.backend.read_chunk(&path_str, off, need as u64) {
+                let want = size as u64;
+                match self.backend.read_chunk(&path_str, offset as u64, want) {
                     Ok(mut data) => {
-                        if data.len() > need {data.truncate(need);}
+                        if data.len() > want as usize {data.truncate(want as usize);}
                         reply.data(&data);
                     }
                     Err(e) => reply.error(map_error(&e)),
