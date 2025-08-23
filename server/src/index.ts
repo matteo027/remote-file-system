@@ -112,13 +112,13 @@ async function db() {
         path: '/create-user.txt',
         owner: admin,
         type: 0,
-        permissions: 0o700,
+        permissions: 0o600,
       });
       const new_group_file = fileRepo.create({
         path: '/create-group.txt',
         owner: admin,
         type: 0,
-        permissions: 0o700,
+        permissions: 0o600,
       });
       fileRepo.save(admin_dir);
       fileRepo.save(root_dir);

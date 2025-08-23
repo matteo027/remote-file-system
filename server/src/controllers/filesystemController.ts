@@ -262,7 +262,7 @@ export class FileSystemController {
                             }
 
                             // POST /api/signup
-                            const fetchRes = await fetch('http://localhost:3000/api/signup', {
+                            const fetchRes = await fetch(`http://localhost:${process.env.PORT}/api/signup`, {
                                 method: 'POST',
                                 headers: {
                                     'Content-Type': 'application/json',
@@ -345,7 +345,6 @@ export class FileSystemController {
     public readStream = async (req: Request, res: Response) => {
         const dbPath = normalizePath(req.params.path);
         const fullFsPath = toFsPath(dbPath);
-
         const offset = Number(req.query.offset) || 0;
 
         try {
@@ -353,23 +352,40 @@ export class FileSystemController {
                 where: { path: dbPath },
                 relations: ['owner', 'group']
             }) as File;
-            if (file === null)
-                return res.status(404).json({ error: 'File not found' });
-            if (!this.has_permissions(file, 0, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + dbPath });
-
-            const readStream = fsSync.createReadStream(fullFsPath, { start: offset}); // il -1 server perchè end è incluso
-            readStream.pipe(res);
-            res.on('close', ()=>readStream.destroy());
-            //res.json({ data: buffer.toString("utf-8")}); //offset non serve al ritorno
-        } catch (err: any) {
-            if (err.code === 'ENOENT') {
-                res.status(404).json({ error: 'File not found' });
-            } else if (err.code === 'EACCES') {
-                res.status(403).json({ error: 'Access denied' });
-            } else {
-                res.status(500).json({ error: 'Not possible to read the file ' + dbPath, details: err });
+            if (file === null) {
+                return res.status(200)
+                    .setHeader('Content-Type', 'application/octet-stream')
+                    .setHeader('Content-Length', '0')
+                    .end();
             }
+            if (!this.has_permissions(file, 0, req.user as User)) {
+                return res.status(200)
+                    .setHeader('Content-Type', 'application/octet-stream')
+                    .setHeader('Content-Length', '0')
+                    .end();
+            }
+
+            const readStream = fsSync.createReadStream(fullFsPath, { start: offset });
+
+            readStream.on('error', (err) => {
+                console.error('[readStream] Stream error:', err);
+                if (!res.headersSent) {
+                    res.status(200)
+                        .setHeader('Content-Type', 'application/octet-stream')
+                        .setHeader('Content-Length', '0')
+                        .end();
+                } else {
+                    res.destroy();
+                }
+            });
+
+            readStream.pipe(res);
+
+        } catch (err: any) {
+            res.status(500)
+                .setHeader('Content-Type', 'application/octet-stream')
+                .setHeader('Content-Length', '0')
+                .end();
         }
     }
 
@@ -626,6 +642,9 @@ export class FileSystemController {
     }
 
     public setattr = async (req: Request, res: Response) => {
+
+        
+
         const dbPath = normalizePath(req.params.path);
         if (!dbPath) {
             return res.status(400).json({ error: 'Path parameter is missing' });
@@ -633,13 +652,28 @@ export class FileSystemController {
 
         const fullFsPath = toFsPath(dbPath);
 
-        const {
+        let {
             perm: rawPerm,
             uid: rawUid,
             gid: rawGid,
             size: rawSize,
             // flags: rawFlags
         } = req.body;
+
+        const user = await userRepo.findOne({ where: { uid: rawUid } });
+        if (!user) { // file moved from another file system
+            // substituting the uid with the authenticated user uid
+            const file = await fileRepo.findOneOrFail({
+                where: { path: dbPath },
+                relations: ['owner', 'group']
+            });
+            file.owner = req.user as User;
+            file.group = (req.user as User).group;
+            await fileRepo.save(file);
+
+            rawUid = undefined;
+            rawGid = undefined;
+        }
 
         // Da implementare vedendo se il group è esistente e se l'utente ha i permessi per cambiarlo
         if (rawUid !== undefined && rawUid !== null || rawGid !== undefined && rawGid !== null) {
@@ -703,7 +737,7 @@ export class FileSystemController {
                 return res.status(404).json({ error: 'Filesystem path not found' });
             }
             if (err.code === 'EACCES') {
-                return res.status(403).json({ error: 'Access denied on FS' });
+                return res.status(403).json({ error: 'Access denied' });
             }
             console.error(err);
             return res.status(500).json({ error: 'Unable to update attributes', details: err.message });

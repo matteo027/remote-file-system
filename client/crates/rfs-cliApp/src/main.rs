@@ -2,7 +2,7 @@ use clap::Parser;
 use daemonize::Daemonize;
 use fuser::{MountOption};
 use rfs_fuse::RemoteFS;
-//use rfs_fuse_macos::RemoteFS as RemoteFSMacOS;
+use rfs_fuse_macos::RemoteFS as RemoteFSMacOS;
 use std::{fs::{create_dir_all, File}, sync::{Arc, Condvar, Mutex}};
 use rfs_api::HttpBackend;
 use rfs_cache::Cache;
@@ -16,7 +16,7 @@ struct Cli {
     #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
     mount_point: String,
 
-    #[arg(short, long, default_value = "http://localhost:3000")]
+    #[arg(short, long, default_value = "http:/fzucca.com:25570")]
     remote_address: String,
 
     #[arg(long, action = clap::ArgAction::SetTrue)]
@@ -44,7 +44,7 @@ fn main() {
         let stderr = File::create("/tmp/remote-fs.err").unwrap();
         if cli.speed_testing {
             println!("Speed testing mode enabled.");
-            let speed = File::create("/tmp/remote-fs.speed-test.out").unwrap();
+            let _speed = File::create("/tmp/remote-fs.speed-test.out").unwrap();
         }
         let daemonize = Daemonize::new()
             .pid_file("/tmp/remote-fs.pid") // saves PID
@@ -52,13 +52,7 @@ fn main() {
             .stderr(stderr) // log stderr
             .working_directory("/")
             .umask(0o027); // file's default permissions
-        match daemonize.start() {
-            Ok(_) => {},
-            Err(e) => {
-            eprintln!("Error in daemonize: {}", e);
-            std::process::exit(1);
-            }
-        }
+        
     }
 
     let options = vec![

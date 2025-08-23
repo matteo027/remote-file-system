@@ -2,7 +2,7 @@ use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, R
 use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream};
 use libc::{EBADF, EILSEQ, EINVAL, ENOENT, ESTALE};
 use std::{
-    collections::HashMap, ffi::OsStr, fs::File, path::{Path, PathBuf}, sync::Arc, time::{self, Duration, Instant, SystemTime}
+    collections::HashMap, ffi::OsStr, fs::File, path::{Path, PathBuf}, sync::Arc, time::{Duration, Instant, SystemTime}
 };
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
@@ -603,9 +603,15 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                     };
                     let next = self.rt.block_on(async { s.next().await });
                     match next {
-                        Some(Ok(bytes)) => state.buffer.extend_from_slice(&bytes),
+                        Some(Ok(bytes)) => {
+                            state.buffer.extend_from_slice(&bytes);
+                            println!("[stream] read of {} at offset {} with size {}", path_str, offset, size);
+                        },
                         Some(Err(e))    => { reply.error(map_error(&e)); return; }
-                        None            => break, // EOF lato server
+                        None => { // EOF server side
+                            println!("[stream] EOF reached for {} at offset {}", path_str, offset);
+                            break;
+                        }
                     }
                 }
 
