@@ -14,14 +14,14 @@ const FOPEN_NONSEEKABLE: u32 = 1 << 2; //bit per settare nonseekable flag (contr
 const LARGE_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
 
 fn map_error(error: &BackendError) -> libc::c_int {
-    use libc::{EIO, EACCES, EEXIST, EHOSTUNREACH};
+    use libc::{EIO, EACCES, EEXIST, EHOSTUNREACH, EPERM, EPROTO};
     match error {
         BackendError::NotFound(_) => {
             ENOENT
         },
         BackendError::Unauthorized => {
             eprintln!("Unauthorized error.");
-            EACCES
+            EPERM
         },
         BackendError::Forbidden => {
             eprintln!("Forbidden error.");
@@ -37,7 +37,7 @@ fn map_error(error: &BackendError) -> libc::c_int {
         },
         BackendError::BadAnswerFormat => {
             eprintln!("Bad answer format.");
-            EIO
+            EPROTO
         },
         BackendError::ServerUnreachable => {
             eprintln!("Server unreachable.");
