@@ -432,7 +432,7 @@ export class FileSystemController {
                     return res.status(400).json({ error: 'Bad format' });
                     }
 
-                    const fetchRes = await fetch('http://localhost:3000/api/signup', {
+                    const fetchRes = await fetch(`http://localhost:${process.env.PORT}/api/signup`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
