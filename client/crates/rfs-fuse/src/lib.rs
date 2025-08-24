@@ -605,12 +605,10 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                         Some(Ok(bytes))=> {
                             if !bytes.is_empty() {
                                 state.buffer.extend_from_slice(&bytes);
-                                println!("[stream] read of {} at offset {} with size {}", path_str, offset, size);
                             }
                         },
                         Some(Err(e)) => { reply.error(map_error(&e)); return; }
                         None => { // EOF server side
-                            println!("[stream] EOF reached for {} at offset {}", path_str, offset);
                             state.eof = true;
                             break;
                         }
@@ -662,7 +660,6 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
 
         if self.speed_testing {
             let duration = timer_start.elapsed();
-            println!("[speed] release of file handle {} duration: {:?}", fh, duration);
             if let Some(file) = self.speed_file.as_mut() {
                 use std::io::Write;
                 writeln!(file, "[speed] release of file handle {} duration: {:?}", fh, duration).ok();
