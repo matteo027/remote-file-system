@@ -1,10 +1,8 @@
 use lru::LruCache;
-use rfs_models::{RemoteBackend, FileEntry, BackendError, SetAttrRequest};
+use rfs_models::{RemoteBackend, FileEntry, BackendError, SetAttrRequest, BLOCK_SIZE};
 use std::num::NonZeroUsize;
 use std::path::Path;
 use rfs_models::ByteStream;
-
-const BLOCK_SIZE: usize = 16*1024; // Dimensione del blocco in byte, metto 16Kb per ridurre le chiamate al backend
 
 #[inline]
 fn block_index(offset: u64) -> u64 {

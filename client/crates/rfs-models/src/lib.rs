@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::Stream;
 use bytes::Bytes;
 
+pub const BLOCK_SIZE: usize = 16 * 1024; // 16KB
+
 // Modello di dominio per una voce di file system remoto, da utilizzare internamente e per caching
 #[derive(Debug, Clone)]
 pub struct FileEntry {

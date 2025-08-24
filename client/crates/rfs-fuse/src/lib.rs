@@ -1,9 +1,12 @@
 use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow};
-use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream};
+use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream, BLOCK_SIZE};
 use libc::{EAGAIN, EBADF, EILSEQ, EINVAL, ENOENT, ESTALE};
-use std::{
-    collections::HashMap, ffi::OsStr, fs::File, path::{Path, PathBuf}, sync::Arc, time::{Duration, Instant, SystemTime}
-};
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
 
@@ -50,6 +53,31 @@ fn map_error(error: &BackendError) -> libc::c_int {
     }
 }
 
+#[inline]
+fn as_backend_str<'a>(path: &'a Path) -> Result<&'a str, libc::c_int> {
+    path.to_str().ok_or(EILSEQ)
+}
+
+fn entry_to_attr(ino: u64, entry: &FileEntry) -> FileAttr {
+        FileAttr {
+            ino,
+            size: entry.size,
+            blocks: (entry.size + 511) / 512, // i blocchi sono di 512 byte come da specifica posix
+            atime: entry.atime,
+            mtime: entry.mtime,
+            ctime: entry.ctime,
+            crtime: entry.btime,
+            kind: if entry.is_dir {FileType::Directory} else {FileType::RegularFile},
+            perm: entry.perms,
+            nlink: entry.nlinks,
+            uid: entry.uid,
+            gid: entry.gid,
+            rdev: 0, // usato per device files, non ci interessa
+            flags: 0, // non lo usiamo per ora, serve per mac os?
+            blksize: BLOCK_SIZE as u32, // è la dimensione di blocco preferita per le operazioni di I/O, matcha con il layer di cache
+        }
+    }
+
 struct StreamState{
     path: String,
     pos: u64,
@@ -89,12 +117,7 @@ pub struct RemoteFS<B: RemoteBackend> {
 }
 
 impl<B: RemoteBackend> RemoteFS<B> {
-    pub fn new(
-        backend: B,
-        runtime: Arc<Runtime>,
-        speed_testing: bool,
-        speed_file: Option<File>,
-    ) -> Self {
+    pub fn new(backend: B,runtime: Arc<Runtime>,speed_testing: bool,speed_file: Option<File>) -> Self {
         Self {
             backend,
             rt: runtime,
@@ -107,10 +130,6 @@ impl<B: RemoteBackend> RemoteFS<B> {
             speed_testing,
             speed_file,
         }
-    }
-
-    fn as_backend_str<'a>(&self, path: &'a Path) -> Result<&'a str, libc::c_int> {
-        path.to_str().ok_or(EILSEQ)
     }
 
     fn get_or_assign_ino(&mut self, path: &Path) -> u64 {
@@ -131,26 +150,6 @@ impl<B: RemoteBackend> RemoteFS<B> {
 
     fn inode_to_path(&self, ino: u64) -> Option<PathBuf> {
         self.ino_to_path.get(&ino).cloned()
-    }
-
-    fn entry_to_attr(&self, ino: u64, entry: &FileEntry) -> FileAttr {
-        FileAttr {
-            ino,
-            size: entry.size,
-            blocks: (entry.size + 511) / 512, // blocchi di 512 byte
-            atime: entry.atime,
-            mtime: entry.mtime,
-            ctime: entry.ctime,
-            crtime: entry.btime,
-            kind: if entry.is_dir {FileType::Directory} else {FileType::RegularFile},
-            perm: entry.perms,
-            nlink: entry.nlinks,
-            uid: entry.uid,
-            gid: entry.gid,
-            rdev: 0, // theoretically we could use this for special files, but we don't have any
-            flags: 0, // not used in this context, only for macOs
-            blksize: 4096, // typical block size for linux filesystems based on ext4
-        }
     }
 }
 
@@ -197,7 +196,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         };
         let full=dir.join(name);
 
-        let metadata= match self.as_backend_str(&full).and_then(|s|{
+        let metadata= match as_backend_str(&full).and_then(|s|{
             match self.backend.get_attr(s){
                 Ok(entry)=>Ok(entry),
                 Err(e) => Err(map_error(&e)),
@@ -210,7 +209,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
         };
         let ino=self.get_or_assign_ino(&full);
-        let attr=self.entry_to_attr(ino, &metadata);
+        let attr=entry_to_attr(ino, &metadata);
         self.bump_lookup(ino); // incrementa il numero di lookup per questo inode
         reply.entry(&TTL, &attr, 0);
         if self.speed_testing {
@@ -257,7 +256,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             reply.error(ENOENT);
             return;
         };
-        let path_str= match self.as_backend_str(&path) {
+        let path_str= match as_backend_str(&path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -266,7 +265,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         };
         match self.backend.get_attr(path_str) {
             Ok(entry) => {
-                let attr = self.entry_to_attr(ino, &entry);
+                let attr = entry_to_attr(ino, &entry);
                 reply.attr(&TTL, &attr);
             }
             Err(e) => reply.error(map_error(&e)),
@@ -289,7 +288,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             reply.error(ESTALE);
             return;
         };
-        let dir_str = match self.as_backend_str(&dir) {
+        let dir_str = match as_backend_str(&dir) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -352,7 +351,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             return;
         };
         let path = dir.join(name);
-        let path_str = match self.as_backend_str(&path) {
+        let path_str = match as_backend_str(&path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -362,7 +361,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         match self.backend.create_file(path_str) {
             Ok(entry) => {
                 let ino = self.get_or_assign_ino(&path);
-                let attr = self.entry_to_attr(ino, &entry);
+                let attr = entry_to_attr(ino, &entry);
                 self.bump_lookup(ino); // incrementa il numero di lookup per questo inode
                 let fh=self.next_fh;
                 self.next_fh += 1; // incrementa il file handle per il prossimo file
@@ -390,7 +389,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             return;
         };
         let path = dir.join(name);
-        let path_str = match self.as_backend_str(&path) {
+        let path_str = match as_backend_str(&path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -400,7 +399,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         match self.backend.create_dir(path_str) {
             Ok(entry) => {
                 let ino = self.get_or_assign_ino(&path);
-                let attr = self.entry_to_attr(ino, &entry);
+                let attr = entry_to_attr(ino, &entry);
                 self.bump_lookup(ino); // incrementa il numero di lookup per questo inode
                 reply.entry(&TTL, &attr, 0);
             }
@@ -425,7 +424,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             return;
         };
         let path = dir.join(name);
-        let path_str = match self.as_backend_str(&path) {
+        let path_str = match as_backend_str(&path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -461,7 +460,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             return;
         };
         let path = dir.join(name);
-        let path_str = match self.as_backend_str(&path) {
+        let path_str = match as_backend_str(&path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -497,7 +496,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             return;
         };
 
-        let path_str = match self.as_backend_str(&path) {
+        let path_str = match as_backend_str(&path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -569,7 +568,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             return;
         };
 
-        let path_str = match self.as_backend_str(&path) {
+        let path_str = match as_backend_str(&path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -675,7 +674,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             return;
         };
 
-        let path_str = match self.as_backend_str(&path) {
+        let path_str = match as_backend_str(&path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -711,14 +710,14 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         let old_path = old_dir.join(name);
         let new_path = new_dir.join(new_name);
 
-        let old_path_str = match self.as_backend_str(&old_path) {
+        let old_path_str = match as_backend_str(&old_path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
                 return;
             }
         };
-        let new_path_str = match self.as_backend_str(&new_path) {
+        let new_path_str = match as_backend_str(&new_path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -786,7 +785,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             reply.error(ENOENT);
             return;
         };  
-        let path_str = match self.as_backend_str(&path) {
+        let path_str = match as_backend_str(&path) {
             Ok(s) => s,
             Err(errno) => {
                 reply.error(errno);
@@ -805,7 +804,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
 
         match self.backend.set_attr(path_str, new_set_attr) {
             Ok(entry) => {
-                let attr = self.entry_to_attr(ino, &entry);
+                let attr = entry_to_attr(ino, &entry);
                 reply.attr(&TTL, &attr);
             }
             Err(e) => reply.error(map_error(&e)),

@@ -2,6 +2,7 @@ use clap::Parser;
 use daemonize::Daemonize;
 use fuser::{MountOption};
 use rfs_fuse::RemoteFS;
+#[cfg(target_os = "macos")]
 use rfs_fuse_macos::RemoteFS as RemoteFSMacOS;
 use std::{fs::{create_dir_all, File}, sync::{Arc, Condvar, Mutex}};
 use rfs_api::HttpBackend;
