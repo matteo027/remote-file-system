@@ -4,36 +4,37 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use rfs_models::ByteStream;
 
-type FilePageKey = (String, u64); // (path, page_idx)
-const PAGE_SIZE: usize = 4096; // Dimensione della pagina in byte
+const BLOCK_SIZE: usize = 16*1024; // Dimensione del blocco in byte, metto 16Kb per ridurre le chiamate al backend
 
-fn page_index(offset: u64) -> u64 {
-    offset / PAGE_SIZE as u64
+#[inline]
+fn block_index(offset: u64) -> u64 {
+    offset / BLOCK_SIZE as u64
 }
 
-fn page_start(idx: u64) -> u64 {
-    idx * PAGE_SIZE as u64
+#[inline]
+fn block_start(idx: u64) -> u64 {
+    idx * BLOCK_SIZE as u64
 }
 
-fn pages_span(offset:u64, len:u64) -> (u64, u64) {
-    let first = page_index(offset);
-    let last = page_index(offset + len.saturating_sub(1));
+#[inline]
+fn blocks_span(offset:u64, len:u64) -> (u64, u64) {
+    let first = block_index(offset);
+    let last = block_index(offset + len.saturating_sub(1));
     (first, last)
 }
 
+#[inline]
 fn get_parent_str(path: &str) -> Option<&str> {
     Path::new(path).parent().and_then(|p| p.to_str())
 }
 
 // Serve per verificare se un path è sotto un certo prefisso, così possiamo invalidare la cache del prefisso
+#[inline]
 fn is_under_prefix(path: &str, prefix: &str) -> bool {
-    if path == prefix {
-        return true;
-    }
-    let path = Path::new(path);
-    let prefix = Path::new(prefix);
-    path.starts_with(prefix)
+    Path::new(path).starts_with(Path::new(prefix))
 }
+
+type FileBlockIdx = u64;
 
 pub struct Cache <B:RemoteBackend>{
     // chiamata al backend remoto
@@ -42,17 +43,19 @@ pub struct Cache <B:RemoteBackend>{
     attr_cache: LruCache<String, FileEntry>,
     // cache tra path e lista dei figli (solo path). Gli attributi dei figli sono in attr_cache
     dir_cache: LruCache<String, Vec<String>>,
-    // cache tra fileChunk e i dati contenuti
-    page_cache: LruCache<FilePageKey, Vec<u8>>
+    // mappa tra path e cache dei blocchi del file, lru su idx del blocco e i dati
+    block_cache: LruCache<String,LruCache<FileBlockIdx,Vec<u8>>>,
+    file_block_cap: NonZeroUsize // capacità massima della lru cache per ciascun file
 }
 
 impl <B:RemoteBackend> Cache<B> {
-    pub fn new(http_backend: B, attr_cap: usize, dir_cap: usize, file_cap: usize) -> Self {
+    pub fn new(http_backend: B, attr_cap: usize, dir_cap: usize, file_block_cap: usize, file_num: usize) -> Self {
         Cache {
             http_backend,
             attr_cache: LruCache::new(NonZeroUsize::new(attr_cap).expect("attr_cap must be non-zero")),
             dir_cache: LruCache::new(NonZeroUsize::new(dir_cap).expect("dir_cap must be non-zero")),
-            page_cache: LruCache::new(NonZeroUsize::new(file_cap).expect("file_cap must be non-zero")),
+            block_cache: LruCache::new(NonZeroUsize::new(file_num).expect("block_cache must be non-zero")),
+            file_block_cap: NonZeroUsize::new(file_block_cap).expect("file_block_cap must be non-zero"),
         }
     }
 
@@ -73,26 +76,30 @@ impl <B:RemoteBackend> Cache<B> {
         for k in to_remove{
             self.dir_cache.pop(&k);
         }
-        let to_remove: Vec<FilePageKey> = self.page_cache.iter().filter_map(|(k,_)| (is_under_prefix(&k.0, prefix)).then(|| (k.0.clone(), k.1))).collect();
+        let to_remove: Vec<String> = self.block_cache.iter().filter_map(|(k,_)| (is_under_prefix(k, prefix)).then(|| k.clone())).collect();
         for k in to_remove{
-            self.page_cache.pop(&k);
+            self.block_cache.pop(&k);
         }
     }
 
-    fn invalidate_pages_for(&mut self, path:&str, from_idx:Option<u64>,to_idx:Option<u64>){
-        let to_remove: Vec<FilePageKey> = self.page_cache.iter().map(|(k,_)| k.clone()).filter(|(p, idx)| {
-            if p != path {
-                return false;
+    fn invalidate_blocks_for(&mut self, path:&str, from_idx:Option<u64>,to_idx:Option<u64>){
+        if let Some(file_cache)=self.block_cache.get_mut(path){
+            let to_remove: Vec<u64> = file_cache.iter()
+                .map(|(idx, _)| *idx)
+                .filter(|idx| match (from_idx, to_idx) {
+                    (Some(from), Some(to)) => *idx >= from && *idx <= to,
+                    (Some(from), None)     => *idx >= from,
+                    (None,   Some(to))     => *idx <= to,
+                    (None,   None)         => true,
+                })
+                .collect();
+            for idx in to_remove {
+                file_cache.pop(&idx);
             }
-            match (from_idx, to_idx) {
-                (Some(from), Some(to)) => *idx >= from && *idx <= to,
-                (Some(from), None) => *idx >= from,
-                (None, Some(to)) => *idx <= to,
-                (None, None) => true,
+            if file_cache.len() == 0 {
+                // se non ci sono più blocchi, rimuovo tutta la cache del file
+                self.block_cache.pop(path);
             }
-        }).collect();
-        for k in to_remove{
-            self.page_cache.pop(&k);
         }
     }
 
@@ -135,7 +142,33 @@ impl <B:RemoteBackend> Cache<B> {
         }
     }
 
+    fn fetch_block_if_missing(&mut self, path: &str, idx: u64) -> Result<(), BackendError> {
+        if let Some(file_cache) = self.block_cache.get_mut(path) {
+            if file_cache.peek(&idx).is_some() {
+                return Ok(());
+            }
+        };
 
+
+        let offset = block_start(idx);
+        let data = self.http_backend.read_chunk(path, offset, BLOCK_SIZE as u64)?;
+        let len = data.len();
+
+        if self.block_cache.get_mut(path).is_none() {
+            self.block_cache.put(path.to_string(), LruCache::new(self.file_block_cap));
+        }
+        let file_cache = self.block_cache.get_mut(path).unwrap();
+        file_cache.put(idx, data);
+
+        // Se il server ha restituito meno di BLOCK_SIZE, significa EOF entro questo blocco:
+        // segna preventivamente il blocco successivo come vuoto (evita una futura chiamata inutile)
+        if len < BLOCK_SIZE {
+            if file_cache.peek(&(idx+1)).is_none() {
+                file_cache.put(idx + 1, Vec::new());
+            }
+        }
+        Ok(())
+    }
 }
 
 impl <B:RemoteBackend> RemoteBackend for Cache<B> {
@@ -152,8 +185,8 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         if let Some(cached_entry) = self.attr_cache.get(path) {
             match self.http_backend.get_attr_if_modified_since(path, cached_entry.mtime) {
                 Ok(Some(updated_entry)) => {
+                    self.invalidate_blocks_for(path, None, None);
                     self.put_attr_and_invalidate_parent(path, &updated_entry);
-                    // TO DO: INVALIDARE ANCHE TUTTA LA CACHE DEI CHUNK DI FILE
                     return Ok(updated_entry);
                 },
                 Ok(None) => return Ok(cached_entry.clone()),
@@ -182,7 +215,7 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
 
     fn delete_file(&mut self, path: &str) -> Result<(), BackendError> {
         self.http_backend.delete_file(path)?;
-        self.invalidate_pages_for(path, None, None);
+        self.invalidate_blocks_for(path, None, None);
         self.invalidate_attr_and_parent(path);
         Ok(())
     }
@@ -201,41 +234,38 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
             return Ok(Vec::new());
         }
 
-        let (first, last) = pages_span(offset, size);
-        let end = offset + size;
+        let (first, last) = blocks_span(offset, size);
+        let req_end = offset + size;
         let mut out = Vec::with_capacity(size as usize);
         let mut remaining = size as usize;
-
         for idx in first..=last {
-            let page_off = page_start(idx);
-
-            // prova cache pagina
-            let maybe = { self.page_cache.get(&(path.to_string(), idx)).cloned() };
-
-            let page: Vec<u8> = if let Some(bytes) = maybe {
-                bytes
-            } else {
-                // quanto leggere per questa pagina
-                let to_fetch = (end - page_off).min(PAGE_SIZE as u64);
-                let data = self.http_backend.read_chunk(path, page_off, to_fetch)?;
-                // metti in cache
-                self.page_cache.put((path.to_string(), idx), data.clone());
-                data
+            self.fetch_block_if_missing(path, idx)?;
+            let file_cache = match self.block_cache.get_mut(path) {
+                Some(cache) => cache,
+                None => return Err(BackendError::Other("cache invariant broken".to_string())),
+            };
+            let block = match file_cache.get(&idx){
+                Some(vec) => vec,
+                None => { return Err(BackendError::Other("cache invariant broken".to_string())); }
             };
 
-            // copia la porzione necessaria dalla pagina
-            let start_in_page = if idx == first {
-                (offset - page_off) as usize
-            } else {
-                0
-            };
-            if start_in_page >= page.len() {
+            if block.is_empty() {
+                // EOF raggiunto
                 break;
             }
-            let avail = page.len() - start_in_page;
-            let take = remaining.min(avail);
-            out.extend_from_slice(&page[start_in_page..start_in_page + take]);
+
+            let block_off = block_start(idx);
+            //start_in_block = offset - block_start if first block, else 0
+            let start_in_block=offset.saturating_sub(block_off) as usize;
+            let end_in_block = (req_end.saturating_sub(block_off) as usize).min(block.len());
+
+            // Copia solo la porzione richiesta e non oltrepassare `remaining`
+            let want = end_in_block - start_in_block;
+            let take = want.min(remaining);
+
+            out.extend_from_slice(&block[start_in_block..start_in_block + take]);
             remaining -= take;
+
             if remaining == 0 {
                 break;
             }
@@ -245,10 +275,10 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
 
     //write invalida solo la cache, sarà la read ssuccessiva a caricarla in cache se necessario
     fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
-        let nwritten = self.http_backend.write_chunk(path, offset, data.clone())?;
+        let nwritten = self.http_backend.write_chunk(path, offset, data)?;
         if nwritten > 0{
-            let (a,b)=pages_span(offset, nwritten);
-            self.invalidate_pages_for(path, Some(a), Some(b));
+            let (a,b)=blocks_span(offset, nwritten);
+            self.invalidate_blocks_for(path, Some(a), Some(b));
         }
         self.invalidate_attr_and_parent(path);
         Ok(nwritten)
@@ -268,8 +298,8 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         
         self.put_attr_and_invalidate_parent(path, &entry);
         if let Some(new_size) = attrs.size{
-            let drop_from=page_index(new_size as u64);
-            self.invalidate_pages_for(path, Some(drop_from), None);
+            let drop_from=block_index(new_size as u64);
+            self.invalidate_blocks_for(path, Some(drop_from), None);
         }
         Ok(entry)
     }

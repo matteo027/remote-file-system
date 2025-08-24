@@ -68,7 +68,7 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let cache = Cache::new(http_backend, 100, 100, 50); // Capacità di cache per attributi, directory e chunk di file
+    let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
     let fs;
     #[cfg(target_os = "linux")]
     {
