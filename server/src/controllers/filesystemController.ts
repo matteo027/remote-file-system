@@ -8,7 +8,6 @@ import { File } from '../entities/File';
 import { User } from '../entities/User';
 import { Group } from '../entities/Group';
 import { pipeline, Writable } from 'node:stream';
-import { AuthenticationController } from './authenticationController';
 
 const FS_ROOT = path_manipulator.join(__dirname, '..', '..', 'file-system');
 const fileRepo = AppDataSource.getRepository(File);

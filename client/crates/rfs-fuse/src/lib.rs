@@ -13,7 +13,6 @@ use tokio_stream::StreamExt;
 const TTL_FILE: Duration = Duration::from_secs(7);
 const TTL_DIR: Duration = Duration::from_secs(3);
 const ROOT_INO: u64 = 1;
-
 const FOPEN_NONSEEKABLE: u32 = 1 << 2; //bit per settare nonseekable flag (controllare meglio abi, non viene codificato in fuser)
 const LARGE_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100 MB
 
@@ -59,25 +58,26 @@ fn as_backend_str<'a>(path: &'a Path) -> Result<&'a str, libc::c_int> {
     path.to_str().ok_or(EILSEQ)
 }
 
+#[inline]
 fn entry_to_attr(ino: u64, entry: &FileEntry) -> FileAttr {
-        FileAttr {
-            ino,
-            size: entry.size,
-            blocks: (entry.size + 511) / 512, // i blocchi sono di 512 byte come da specifica posix
-            atime: entry.atime,
-            mtime: entry.mtime,
-            ctime: entry.ctime,
-            crtime: entry.btime,
-            kind: if entry.is_dir {FileType::Directory} else {FileType::RegularFile},
-            perm: entry.perms,
-            nlink: entry.nlinks,
-            uid: entry.uid,
-            gid: entry.gid,
-            rdev: 0, // usato per device files, non ci interessa
-            flags: 0, // non lo usiamo per ora, serve per mac os?
-            blksize: BLOCK_SIZE as u32, // è la dimensione di blocco preferita per le operazioni di I/O, matcha con il layer di cache
-        }
+    FileAttr {
+        ino,
+        size: entry.size,
+        blocks: (entry.size + 511) / 512, // i blocchi sono di 512 byte come da specifica posix
+        atime: entry.atime,
+        mtime: entry.mtime,
+        ctime: entry.ctime,
+        crtime: entry.btime,
+        kind: if entry.is_dir {FileType::Directory} else {FileType::RegularFile},
+        perm: entry.perms,
+        nlink: entry.nlinks,
+        uid: entry.uid,
+        gid: entry.gid,
+        rdev: 0, // usato per device files, non ci interessa
+        flags: 0, // non lo usiamo per ora, serve per mac os?
+        blksize: BLOCK_SIZE as u32, // è la dimensione di blocco preferita per le operazioni di I/O, matcha con il layer di cache
     }
+}
 
 struct StreamState{
     path: String,
