@@ -1,20 +1,21 @@
 use httpdate::fmt_http_date;
 use reqwest::cookie::Jar;
-use reqwest::header::{self, HeaderValue, CONTENT_TYPE};
-use reqwest::{Client, Method, Response, StatusCode, Url};
+use reqwest::header::{self, HeaderMap, HeaderValue, CONTENT_TYPE};
+use reqwest::{Client, Method, Response, StatusCode, Url, Body};
 use rfs_models::{BackendError, FileEntry, RemoteBackend, SetAttrRequest};
 use rpassword::read_password;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::ffi::OsStr;
-use std::io::{stdin,stdout, Write};
+use std::io::{stdin, stdout, Cursor, Write};
 use std::path::PathBuf;
 use std::str::{ FromStr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
+use tokio_util::io::ReaderStream;
 
 
 #[derive(Deserialize, Debug)]
@@ -338,6 +339,32 @@ impl RemoteBackend for HttpBackend {
             StatusCode::OK => {
                 let stream=resp.bytes_stream().map(|r| r.map_err(|e| BackendError::Other(e.to_string())));
                 return Ok(Box::pin(stream));
+            },
+            _ => Err(self.decode_error(resp, &endpoint)),
+        }
+    }
+
+    fn write_stream(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<(), BackendError> {
+        let endpoint = format!("api/files/stream/{}?offset={}", path.trim_start_matches('/'), offset);
+
+        // using Cursor to transform Vec<u8> into a reader
+        let cursor = Cursor::new(data);
+        let reader_stream = ReaderStream::new(cursor);
+        let body = Body::wrap_stream(reader_stream);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+        headers.insert("x-chunk-offset", HeaderValue::from(offset));
+
+        let req = self.client
+            .put(self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?)
+            .headers(headers)
+            .body(body);
+
+        let resp = self.runtime.block_on(async { req.send().await }).map_err(|e| BackendError::Other(e.to_string()))?;
+        return match resp.status() {
+            StatusCode::OK => {
+                Ok(())
             },
             _ => Err(self.decode_error(resp, &endpoint)),
         }

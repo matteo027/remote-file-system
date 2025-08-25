@@ -17,7 +17,7 @@ struct Cli {
     #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
     mount_point: String,
 
-    #[arg(short, long, default_value = "http:/fzucca.com:25570")]
+    #[arg(short, long, default_value = "http://fzucca.com:25570")]
     remote_address: String,
 
     #[arg(long, action = clap::ArgAction::SetTrue)]
@@ -73,7 +73,7 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
+    //let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
     let fs;
     #[cfg(target_os = "linux")]
     {
@@ -83,7 +83,7 @@ fn main() {
             None
         };
 
-        fs = RemoteFS::new(cache, runtime.clone(), cli.speed_testing, speed_file);
+        fs = RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, speed_file);
     }
     #[cfg(target_os = "macos")]
     {

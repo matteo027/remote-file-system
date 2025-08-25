@@ -305,4 +305,8 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
     fn read_stream(&mut self, path: &str, offset: u64) -> Result<ByteStream, BackendError> {
         self.http_backend.read_stream(path, offset)
     }
+    
+    fn write_stream(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<(), BackendError> {
+        self.http_backend.write_stream(path, offset, data)
+    }
 }

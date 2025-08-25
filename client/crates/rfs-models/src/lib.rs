@@ -98,6 +98,8 @@ pub trait RemoteBackend: Send + Sync {
 
     /// legge un file intero come stream di byte (per file molto grandi)
     fn read_stream(&mut self, path: &str, offset: u64) -> Result<ByteStream, BackendError>;
+    /// scrive un file intero come stream di byte (per file molto grandi)
+    fn write_stream(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<(), BackendError>;
 
     fn get_attr_if_modified_since(&mut self, path: &str, _since: SystemTime) -> Result<Option<FileEntry>, BackendError> {
         Ok(Some(self.get_attr(path)?))
