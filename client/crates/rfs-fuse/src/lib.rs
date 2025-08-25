@@ -316,7 +316,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         let start = (off - 2).max(0) as usize;
         for (i, entry) in entries.iter().enumerate().skip(start) {
             let full = dir.join(&entry.name);
-            let child_ino = self.path_to_ino.get(&full).copied().unwrap_or(0);
+            let child_ino = self.get_or_assign_ino(&full);
             let kind = if entry.is_dir {
                 FileType::Directory
             } else {
