@@ -36,16 +36,16 @@ fn main() {
             std::process::exit(1);
         }
     };
-    eprintln!("Authentication successful.");
+    println!("Authentication successful.");
 
     
     #[cfg(target_os = "linux")]
     {
-        let stdout = File::create("/tmp/remote-fs.out").unwrap();
-        let stderr = File::create("/tmp/remote-fs.err").unwrap();
+        let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
+        let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
         if cli.speed_testing {
             println!("Speed testing mode enabled.");
-            let _speed = File::create("/tmp/remote-fs.speed-test.out").unwrap();
+            let _speed = File::create("/tmp/remote-fs.speed-test.out").expect("Failed to create speed test log file");
         }
         let daemonize = Daemonize::new()
             .pid_file("/tmp/remote-fs.pid") // saves PID
@@ -56,16 +56,13 @@ fn main() {
         match daemonize.start() {
             Ok(_) => {},
             Err(e) => {
-            eprintln!("Error in daemonize: {}", e);
-            std::process::exit(1);
+                eprintln!("Error in daemonize: {}", e);
+                std::process::exit(1);
             }
         }
     }
 
-    let options = vec![
-        MountOption::FSName("Remote-FS".to_string()),
-        MountOption::RW,
-    ];
+    let options = vec![MountOption::FSName("Remote-FS".to_string()),MountOption::RW];
 
     let runtime= Arc::new(Builder::new_multi_thread().enable_all().thread_name("rfs-runtime").build().expect("Unable to build a Runtime object"));
 
@@ -81,7 +78,7 @@ fn main() {
     #[cfg(target_os = "linux")]
     {
         let speed_file = if cli.speed_testing {
-            Some(File::create("/tmp/remote-fs.speed-test.out").unwrap())
+            Some(File::create("/tmp/remote-fs.speed-test.out").expect("Failed to create speed test log file"))
         } else {
             None
         };
