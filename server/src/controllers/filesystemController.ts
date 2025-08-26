@@ -296,7 +296,7 @@ export class FileSystemController {
                             }
 
                             // POST /api/group
-                            const fetchRes = await fetch('http://localhost:3000/api/group', {
+                            const fetchRes = await fetch(`http://localhost:${process.env.PORT}/api/group`, {
                                 method: 'POST',
                                 headers: {
                                     'Content-Type': 'application/json',
@@ -352,13 +352,13 @@ export class FileSystemController {
                 relations: ['owner', 'group']
             }) as File;
             if (file === null) {
-                return res.status(200)
+                return res.status(404)
                     .setHeader('Content-Type', 'application/octet-stream')
                     .setHeader('Content-Length', '0')
                     .end();
             }
             if (!this.has_permissions(file, 0, req.user as User)) {
-                return res.status(200)
+                return res.status(403)
                     .setHeader('Content-Type', 'application/octet-stream')
                     .setHeader('Content-Length', '0')
                     .end();
@@ -369,7 +369,7 @@ export class FileSystemController {
             readStream.on('error', (err) => {
                 console.error('[readStream] Stream error:', err);
                 if (!res.headersSent) {
-                    res.status(200)
+                    res.status(500)
                         .setHeader('Content-Type', 'application/octet-stream')
                         .setHeader('Content-Length', '0')
                         .end();
@@ -464,7 +464,7 @@ export class FileSystemController {
                     return res.status(400).json({ error: 'Bad format' });
                     }
 
-                    const fetchRes = await fetch('http://localhost:3000/api/group', {
+                    const fetchRes = await fetch(`http://localhost:${process.env.PORT}/api/group`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
