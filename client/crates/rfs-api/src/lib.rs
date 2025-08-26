@@ -346,7 +346,7 @@ impl RemoteBackend for HttpBackend {
 
     fn write_stream(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<(), BackendError> {
         let endpoint = format!("api/files/stream/{}?offset={}", path.trim_start_matches('/'), offset);
-
+        println!("Writing stream to {}", endpoint);
         // using Cursor to transform Vec<u8> into a reader
         let cursor = Cursor::new(data);
         let reader_stream = ReaderStream::new(cursor);
@@ -361,9 +361,12 @@ impl RemoteBackend for HttpBackend {
             .headers(headers)
             .body(body);
 
+            println!("Sending request to {}", endpoint);
         let resp = self.runtime.block_on(async { req.send().await }).map_err(|e| BackendError::Other(e.to_string()))?;
+        println!("Received response with status: {}", resp.status());
         return match resp.status() {
             StatusCode::OK => {
+                println!("Stream write successful");
                 Ok(())
             },
             _ => Err(self.decode_error(resp, &endpoint)),

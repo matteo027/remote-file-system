@@ -53,13 +53,7 @@ fn main() {
             .stderr(stderr) // log stderr
             .working_directory("/")
             .umask(0o027); // file's default permissions
-        match daemonize.start() {
-            Ok(_) => {},
-            Err(e) => {
-                eprintln!("Error in daemonize: {}", e);
-                std::process::exit(1);
-            }
-        }
+        
     }
 
     let options = vec![MountOption::FSName("Remote-FS".to_string()),MountOption::RW];

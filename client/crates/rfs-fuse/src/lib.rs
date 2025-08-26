@@ -1,7 +1,7 @@
 use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow, consts};
 use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream, BLOCK_SIZE};
 use libc::{EAGAIN, EBADF, EILSEQ, EINVAL, ENOENT, ENOSYS, ESTALE, O_ACCMODE, O_RDONLY, O_RDWR, O_WRONLY};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -117,7 +117,7 @@ pub struct RemoteFS<B: RemoteBackend> {
     // file handle management
     next_fh: u64, // file handle da allocare
     file_handles: HashMap<u64, ReadMode>, // mappa file handle, per gestire read in streaming continuo su file già aperti
-    write_buffers: HashMap<u64, (Vec<u8>, u64)>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
+    write_buffers: HashMap<u64, BTreeMap<u64, Vec<u8>>>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
 
     // opzioni di testing
     speed_testing: bool,
@@ -183,24 +183,56 @@ impl<B: RemoteBackend> RemoteFS<B> {
     }
 
     fn flush_file(&mut self, fh: u64, path_str: &str) -> Result<(), BackendError> {
-        let mut api_res = Ok(());
 
-        if let Some((buffer, offset)) = self.write_buffers.get_mut(&fh) {
-            if buffer.len() as u64 > LARGE_FILE_SIZE {
-                // streaming
-                api_res = self.backend.write_stream(path_str, *offset - buffer.len() as u64, buffer.to_vec())
-            } else {
-                // sends the chunk all at once
-                match self.backend.write_chunk(path_str, *offset - buffer.len() as u64, buffer.to_vec()) {
-                    Ok(_written) => api_res = Ok(()),
-                    Err(e) => api_res = Err(e),
-                }
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+
+        let mut start_offset = None;
+        let mut last_offset = None;
+        // Collect the map's contents into a vector to avoid double mutable borrow
+        let map_entries: Vec<(u64, Vec<u8>)> = {
+            let map: &mut BTreeMap<u64, Vec<u8>> = self.write_buffers.get_mut(&fh).unwrap();
+            let entries = map.iter().map(|(k, v)| (*k, v.clone())).collect();
+            map.clear();
+            entries
+        };
+        
+        let mut buffer = Vec::<u8>::new();
+        for (off, data) in map_entries.iter() {
+
+            if None == start_offset {
+                start_offset = Some(*off);
+                last_offset = Some(*off);
             }
-            buffer.clear();
-            *offset = 0;
+
+            if last_offset.unwrap() + page_size == *off {
+                last_offset = Some(*off);
+                buffer.extend_from_slice(&data);
+            } else {
+                // Flush the current buffer
+                self.flush_buffer(&mut buffer, path_str, start_offset.unwrap())?;
+
+                start_offset = Some(*off);
+                last_offset = Some(*off);
+                buffer.extend_from_slice(&data);
+            }
         }
 
-        api_res
+        // flushing last bytes
+        self.flush_buffer(&mut buffer, path_str, start_offset.unwrap())?;
+
+        Ok(())
+    }
+
+    fn flush_buffer(&mut self, buffer: &mut Vec<u8>, path_str: &str, offset: u64) -> Result<(), BackendError> {
+        if !buffer.is_empty() {
+            if buffer.len() > LARGE_FILE_SIZE as usize {
+                self.backend.write_stream(path_str, offset, buffer.clone())?
+            } else {
+                self.backend.write_chunk(path_str, offset, buffer.clone())?;
+            }
+        }
+        buffer.clear();
+        Ok(())
     }
 }
 
@@ -381,6 +413,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 let attr = entry_to_attr(ino, &entry);
                 self.bump_lookup(ino); // incrementa il numero di lookup per questo inode
                 let fh=self.next_fh;
+                self.write_buffers.insert(fh, BTreeMap::new()); // used for buffering writes
                 self.next_fh += 1; // incrementa il file handle per il prossimo file
                 self.file_handles.insert(fh, ReadMode::SmallPages); // inizializza il
                 reply.created(&TTL_FILE, &attr, 0, fh, fuser::consts::FOPEN_DIRECT_IO); // FOPEN_KEEP_CACHE se vuoi mantenere la cache del kernel
@@ -552,7 +585,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             self.file_handles.insert(fh, mode);
         }
         if (flags & O_ACCMODE) == O_WRONLY || (flags & O_ACCMODE) == O_RDWR {
-            self.write_buffers.insert(fh, (Vec::new(), 0));
+            self.write_buffers.insert(fh, BTreeMap::new());
             fuse_flags = consts::FOPEN_DIRECT_IO;
         }
         reply.opened(fh, fuse_flags); 
@@ -593,7 +626,11 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         };
 
         let Some(mut handle) = self.file_handles.get_mut(&fh) else {
-            reply.error(EBADF); // File handle non trovato
+            if self.write_buffers.contains_key(&fh) {
+                reply.error(EBADF);
+                return;
+            }
+            reply.error(ENOENT);
             return;
         };
         
@@ -696,6 +733,16 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 return;
             }
         };
+
+        if !self.write_buffers.contains_key(&fh) {
+            if self.file_handles.contains_key(&fh) {
+                reply.error(EBADF);
+                return;
+            }
+            reply.error(ENOENT);
+            return;
+        }
+
         let mut off= offset as u64;
         if flags & libc::O_APPEND != 0 {
             match self.backend.get_attr(path_str) {
@@ -708,33 +755,13 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
 
         if self.write_buffers.get(&fh).is_none() {
-            reply.error(EBADF); // File handle non trovato
+            reply.error(EBADF); // File handle not found
             return;
         }
         // Scope to limit the mutable borrow of write_buffers
-        let mut need_flush = false;
-        {
-            let (buffer, last_offset) = self.write_buffers.get_mut(&fh).unwrap();
-            if buffer.is_empty() {
-                buffer.extend_from_slice(data);
-            }
-            else if buffer.len() as u64 == off - *last_offset { // contiguous write
-                buffer.extend_from_slice(data);
-            }
-            else {
-                need_flush = true;
-            }
-            *last_offset = off + data.len() as u64;
-        }
-        if need_flush {
-            match self.flush_file(fh, path_str) {
-                Ok(_bytes_written) => {},
-                Err(e) => {
-                    reply.error(map_error(&e));
-                    return;
-                },
-            }
-        }
+        let buffer = self.write_buffers.get_mut(&fh).unwrap();
+        buffer.insert(off, data.to_vec());
+
         reply.written(data.len() as u32);
 
         
@@ -870,6 +897,8 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
     // called when a fd closes
     fn flush(&mut self,_req: &Request<'_>, ino: u64, fh: u64,_lock_owner: u64,reply: ReplyEmpty) {
 
+        let timer_start = Instant::now();
+
         let Some(path) = self.inode_to_path(ino) else{
             reply.error(ENOENT);
             return;
@@ -882,16 +911,26 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 return;
             }
         };
-
-        match self.flush_file(fh, path_str) {
-            Ok(_bytes_written) => reply.ok(),
-            Err(e) => {
-                reply.error(map_error(&e));
-                return;
+        
+        if self.write_buffers.contains_key(&fh) {
+            match self.flush_file(fh, path_str) {
+                Ok(_bytes_written) => reply.ok(),
+                Err(e) => {
+                    reply.error(map_error(&e));
+                    return;
+                }
             }
+
+            self.write_buffers.remove(&fh); // removes the write buffer associated with this file handle
         }
 
-        self.write_buffers.remove(&fh); // removes the write buffer associated with this file handle
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] flush of {} duration: {:?}", path_str, duration).ok();
+            }
+        }
 
     }
 
