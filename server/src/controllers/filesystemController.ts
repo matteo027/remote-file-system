@@ -100,7 +100,6 @@ export class FileSystemController {
                     }
 
                     if (!this.has_permissions(file, 0, req.user as User)) return undefined;
-                    console.log(file.ino.toString());
 
                     return {
                         ino: file.ino.toString(),                    
@@ -129,7 +128,7 @@ export class FileSystemController {
 
     public mkdir = async (req: Request, res: Response) => {
         const parentIno=BigInt(req.params.parentIno);
-        const {name} =req.body ?? {};
+        const name: string | undefined = req.body?.name;
 
         if(!parentIno)
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
@@ -194,75 +193,197 @@ export class FileSystemController {
     }
 
     public rmdir = async (req: Request, res: Response) => {
-        const dbPath    = normalizePath(req.params.path);
-        const fullFsPath = toFsPath(dbPath);
+        const parentIno=BigInt(req.params.parentIno);
+        const name: string | undefined = req.body?.name;
 
+        if(!parentIno)
+            return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
+        if (typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+            return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
+
+        const user = req.user as User;
+        if (user === null) {
+            return res.status(500).json({ error: 'Not possible to retreive user data' });
+        }
         try {
-            const dir: File = await fileRepo.findOne({ where: { path: dbPath }, relations: ['owner'] }) as File;
-            if (!this.has_permissions(dir, 1, req.user as User))
-                return res.status(403).json({ error: 'EACCES', message: 'You have not the permission to remove the directory ' + dbPath });
+            const parent= await fileRepo.findOne({
+                where:{ino:parentIno},
+                relations:["owner","group"],
+            })as File;
+            if (!parent){
+                return res.status(404).json({ error: "ENOENT", message: `Parent inode ${parentIno} not found` });
+            }
+            
+            if(!this.has_permissions(parent,1,user)){
+                return res.status(403).json({ error: "EACCES", message: `No permission to remove in ${parent.path}` });
+            }
+            const childDbPath = parent.path === "/" ? `/${name}` : `${parent.path}/${name}`;
+            const childFsPath = toFsPath(childDbPath);
 
-            if (dir.type != 1) {
-                return res.status(400).json({ error: 'ENOTDIR', message: 'The specified path is not a directory' });
+            const child= await fileRepo.findOne({
+                where: { path: childDbPath },
+                relations: ["owner", "group"],
+            }) as File;
+
+            if(!child){
+                return res.status(404).json({ error: "ENOENT", message: "Directory not found" });
             }
 
-            await fs.rm(fullFsPath, { recursive: true }); // fs.rmdirwill be depreacted
-            await fileRepo.remove(dir);
+            if (child.type !== 1) {
+                return res.status(400).json({ error: "ENOTDIR", message: "The specified name is not a directory" });
+            }
 
-            res.status(200).end();
+            try{
+                await fs.rmdir(childFsPath);
+            } catch (e:any){
+                if (e?.code === "ENOTEMPTY") {
+                    return res.status(409).json({ error: "ENOTEMPTY", message: "Directory not empty" });
+                }
+                if (e?.code === "ENOENT") {
+                    return res.status(404).json({ error: "ENOENT", message: "Directory not found" });
+                }
+                throw e;
+            }
+
+            await fileRepo.remove(child);
+            return res.status(200).end();
         } catch (err: any) {
-            if (err.code === 'ENOENT') {
-                res.status(404).json({ error: 'Directory not found' });
-            } else {
-                res.status(500).json({ error: 'Not possible to remove the directory ' + dbPath, details: err });
-            }
+            return res.status(500).json({
+                error: "EIO",
+                message: "Not possible to remove the directory",
+                details: String(err?.message ?? err),
+            });
         }
     }
 
     public create = async (req: Request, res: Response) => {
+        const parentIno=BigInt(req.params.parentIno);
+        const name: string | undefined = req.body?.name;
 
-        const dbPath    = normalizePath(req.params.path);
-        const fullFsPath = toFsPath(dbPath);
-        const user: User = req.user as User;
+        if(!parentIno)
+            return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
+        if (typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+            return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
+
+        const user = req.user as User;
         if (user === null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
 
-        const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
+        const userGroup= await groupRepo.findOne({where: {users:user}}) as Group;
+        try{
+            const parent=await fileRepo.findOne({
+                where:{ino:parentIno},
+                relations:["owner","group"]
+            }) as File;
 
-        try {
-            await fs.writeFile(fullFsPath, "", { flag: "wx" });
+            if (!parent) 
+                return res.status(404).json({ error: "ENOENT", message: `Parent inode ${parentIno} not found` });
 
-            const file: File = {
-                path: dbPath,
-                owner: user,
+            if (parent.type !== 1) 
+                return res.status(400).json({ error: "ENOTDIR", message: "Parent is not a directory" });
+
+            if(!this.has_permissions(parent,1,user)){
+                return res.status(403).json({ error: "EACCES", message: `No permission to create in ${parent.path}` });
+            }
+
+            const childDbPath = parent.path === "/" ? `/${name}` : `${parent.path}/${name}`;
+            const childFsPath = toFsPath(childDbPath);
+
+            await fs.writeFile(childFsPath, "", { flag: "wx" });
+            const stats=await fs.lstat(childFsPath,{bigint:true});
+            const file={
+                ino:stats.ino,
+                path:childDbPath,
+                owner:user,
+                group: userGroup ?? null,
                 type: 0,
                 permissions: 0o644,
-                group: user_group,
-            } as File;
+            }
             await fileRepo.save(file);
 
-            // retreiving file size dinamically
-            const stats: Stats = await fs.stat(fullFsPath);
-
-            res.status(200).json({
-                ...file,
+            return res.status(201).json({
+                ino: stats.ino.toString,
+                path: file.path,
+                type: file.type,
+                permission: file.permissions,
                 owner: user.uid,
-                group: user_group?.gid,
-                size: stats.size,
+                group: userGroup?.gid ?? null,
+                size: stats.size.toString(),
                 atime: stats.atime.getTime(),
                 mtime: stats.mtime.getTime(),
                 ctime: stats.ctime.getTime(),
-                btime: stats.birthtime.getTime()
-            });
-        } catch (err: any) {
-            if (err.code === 'ENOENT') {
-                res.status(404).json({ error: 'Directory not found' });
-            } else if (err.code === 'EEXIST') {
-                res.status(409).json({ error: 'File already exists' });
-            } else {
-                res.status(500).json({ error: 'Not possible to create the file ' + dbPath, details: err });
+                btime: stats.birthtime.getTime(),
+            })
+        }catch(err:any){
+            console.log(err);
+            if (err?.code === "EEXIST") {
+                return res.status(409).json({ error: "EEXIST", message: "File already exists" });
             }
+            if (err?.code === "ENOENT") {
+                return res.status(404).json({ error: "ENOENT", message: "Parent path not found on filesystem" });
+            }
+            return res.status(500).json({
+                error: "EIO",
+                message: "Not possible to create the file",
+                details: String(err?.message ?? err),
+            });
+        }
+    }
+
+    public unlink = async (req: Request, res: Response) => {
+        const parentIno=BigInt(req.params.parentIno);
+        const name: string | undefined = req.body?.name;
+
+        if(!parentIno)
+            return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
+        if (typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+            return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
+
+        const user = req.user as User;
+        if (user === null) {
+            return res.status(500).json({ error: 'Not possible to retreive user data' });
+        }
+
+        try{
+            const parent= await fileRepo.findOne({
+                where:{ino:parentIno},
+                relations:["owner", "group"],
+            }) as File;
+            if (!parent){
+                if (!parent) return res.status(404).json({ error: "ENOENT", message: `Parent inode ${parentIno} not found` });
+            }
+            if(!this.has_permissions(parent,1,user)){
+                return res.status(403).json({ error: "EACCES", message: `No permission to remove in ${parent.path}` });
+            }
+            const childDbPath = parent.path === "/" ? `/${name}` : `${parent.path}/${name}`;
+            const childFsPath = toFsPath(childDbPath);
+            const child=await fileRepo.findOne({
+                where: {path:childDbPath},
+                relations:["owner","group"],
+            })as File;
+            if (!child){
+                return res.status(404).json({ error: "ENOENT", message: "File metadata not found in database" });
+            }
+
+            try{
+                await fs.unlink(childFsPath);
+            }catch(err:any){
+                if (err?.code === "ENOENT")  
+                    return res.status(404).json({ error: "ENOENT", message: "File not found" });
+                if (err?.code === "EISDIR")  
+                    return res.status(400).json({ error: "EISDIR", message: "Target is a directory" });
+                throw err;
+            }
+
+            await fileRepo.remove(child);
+            return res.status(200).end();
+        }catch(err:any){
+            return res.status(500).json({
+                error: "EIO",
+                message: "Not possible to remove the file",
+                details: String(err?.message ?? err),
+            });
         }
     }
 
@@ -596,41 +717,6 @@ export class FileSystemController {
             }
         }
 
-    }
-
-    public unlink = async (req: Request, res: Response) => {
-        const dbPath    = normalizePath(req.params.path);
-        const fullFsPath = toFsPath(dbPath);
-
-        const user: User = req.user as User;
-        if (user === null) {
-            return res.status(500).json({ error: 'Not possible to retreive user data' });
-        }
-
-        const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
-        try {
-            const file: File = await fileRepo.findOne({
-                where: { path: dbPath },
-                relations: ['owner', 'group']
-            }) as File;
-
-            if (!file) {
-                return res.status(404).json({ error: 'File metadata not found in database' });
-            }
-            if (!this.has_permissions(file, 1, user))
-                return res.status(403).json({ err: 'You have not the permission to delete the file ' + dbPath });
-
-            await fs.rm(fullFsPath, { force: true }); // force is used to ignore errors if the file does not exist
-            await fileRepo.remove(file);
-
-            res.status(200).end();
-        } catch (err: any) {
-            if (err.code === 'ENOENT') {
-                res.status(404).json({ error: 'File not found' });
-            } else {
-                res.status(500).json({ error: 'Not possible to remove the file ' + dbPath, details: err });
-            }
-        }
     }
 
     public rename = async (req: Request, res: Response) => {

@@ -13,16 +13,16 @@ export function setRoutes(app: Express) {
 
     router.get('/api/directories/:ino', isLoggedIn, filesystemController.readdir);
     router.post('/api/directories/:parentIno', isLoggedIn, filesystemController.mkdir);
-    router.delete('/api/directories/{*path}', isLoggedIn, filesystemController.rmdir);
+    router.delete('/api/directories/:parentIno', isLoggedIn, filesystemController.rmdir);
 
     router.patch('/api/files/attributes/{*path}', isLoggedIn, filesystemController.setattr);
-    router.get('/api/files/attributes/{*path}', isLoggedIn, filesystemController.getattr);
+    router.get('/api/files/attributes/:ino', isLoggedIn, filesystemController.getattr);
 
-    router.post('/api/files/{*path}', isLoggedIn, filesystemController.create);
+    router.post('/api/files/:parentIno', isLoggedIn, filesystemController.create);
     router.put('/api/files/stream/{*path}', isLoggedIn, filesystemController.writeStream);
     router.get('/api/files/stream/{*path}', isLoggedIn, filesystemController.readStream);
     router.put('/api/files/{*path}', isLoggedIn, express.raw({type:'application/octet-stream', limit: '1gb'}), filesystemController.write);
     router.get('/api/files/{*path}', isLoggedIn, filesystemController.read);
-    router.delete('/api/files/{*path}', isLoggedIn, filesystemController.unlink);
-    router.patch('/api/files/{*path}', isLoggedIn, filesystemController.rename); // rename
+    router.delete('/api/files/:parentIno', isLoggedIn, filesystemController.unlink);
+    router.patch('/api/files/:oldParentIno/:oldName', isLoggedIn, filesystemController.rename); // rename
 }
