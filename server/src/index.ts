@@ -90,31 +90,39 @@ async function db() {
       });
       await userRepo.save(admin);
       
-      
-      // creating the 5000 (admin) folder and the create-user file
-      await fs.mkdir('./file-system/5000', { recursive: true });
-      await fs.writeFile('./file-system/create-user.txt', '');
-      await fs.writeFile('./file-system/create-group.txt', '');
-      let now = Date.now();
-      const admin_dir = fileRepo.create({
-        path: '/5000',
-        owner: admin,
-        type: 1,
-        permissions: 0o755,
-      } as File);
       const root_dir = fileRepo.create({
+        ino: BigInt(1),
         path: '/',
         owner: admin,
         type: 1,
         permissions: 0o755,
       } as File);
+
+      // creating the 5000 (admin) folder and the create-user file
+      await fs.mkdir('./file-system/5000', { recursive: true });
+      let ino = (await fs.lstat('./file-system/5000',{bigint:true})).ino;
+      const admin_dir = fileRepo.create({
+        ino:ino,
+        path: '/5000',
+        owner: admin,
+        type: 1,
+        permissions: 0o755,
+      } as File);
+
+      await fs.writeFile('./file-system/create-user.txt', '');
+      ino = (await fs.lstat('./file-system/create-user.txt',{bigint:true})).ino;
       const new_user_file = fileRepo.create({
+        ino:ino,
         path: '/create-user.txt',
         owner: admin,
         type: 0,
         permissions: 0o600,
       });
+
+      await fs.writeFile('./file-system/create-group.txt', '');
+      ino = (await fs.lstat('./file-system/create-group.txt',{bigint:true})).ino;
       const new_group_file = fileRepo.create({
+        ino:ino,
         path: '/create-group.txt',
         owner: admin,
         type: 0,

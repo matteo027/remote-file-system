@@ -11,8 +11,8 @@ const isLoggedIn = (new AuthenticationController).isLoggedIn;
 export function setRoutes(app: Express) {
     app.use('/', router);
 
-    router.get('/api/directories/{*path}', isLoggedIn, filesystemController.readdir);
-    router.post('/api/directories/{*path}', isLoggedIn, filesystemController.mkdir);
+    router.get('/api/directories/:ino', isLoggedIn, filesystemController.readdir);
+    router.post('/api/directories/:parentIno', isLoggedIn, filesystemController.mkdir);
     router.delete('/api/directories/{*path}', isLoggedIn, filesystemController.rmdir);
 
     router.patch('/api/files/attributes/{*path}', isLoggedIn, filesystemController.setattr);
