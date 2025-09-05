@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { fileRepo,userRepo,toFsPath,has_permissions,parseIno,toEntryJson,isBadName,childPathOf} from './utility';
+import { fileRepo,userRepo,toFsPath,has_permissions,parseIno,toEntryJson,isBadName,childPathOf} from '../utilities';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import * as fs from 'node:fs/promises';
