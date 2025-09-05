@@ -12,7 +12,7 @@ export class File {
   @PrimaryColumn({type:"bigint", transformer: BigIntTransformer})
   ino: bigint;
 
-  @Column({nullable:false})
+  @Column({nullable:false, unique:true})
   path:string;
 
   @ManyToOne(() => User, (user) => user.files)

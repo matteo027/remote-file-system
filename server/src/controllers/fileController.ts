@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { fileRepo,groupRepo,toFsPath,has_permissions} from './utility';
+import { fileRepo,groupRepo,toFsPath,has_permissions,parseIno,toEntryJson,isBadName,childPathOf} from './utility';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import { Group } from '../entities/Group';
@@ -7,16 +7,16 @@ import * as fs from 'node:fs/promises';
 
 export class FileController{
     public mkdir = async (req: Request, res: Response) => {
-        const parentIno=BigInt(req.params.parentIno);
+        const parentIno=parseIno(req.params.parentIno);
         const name = req.params.name;
 
         if(!parentIno)
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
-        if (!name || typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+        if (isBadName(name))
             return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
 
-        const user: User = req.user as User;
-        if (user == null)
+        const user = req.user as User |undefined;
+        if (!user)
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         const userGroup = (await groupRepo.findOne({ where: { users: user } })) as Group | null;
         
@@ -30,11 +30,11 @@ export class FileController{
                 return res.status(404).json({ error: "ENOENT", message: `Parent inode ${parentIno} not found` });
             }
 
-            if(!has_permissions(parent,2,user)){
+            if(!has_permissions(parent,1,user)){
                 return res.status(403).json({ error: "EACCES", message: `No permission to create in ${parent.path}` });
             }
 
-            const childDbPath = parent.path === "/" ? `/${name}` : `${parent.path}/${name}`;
+            const childDbPath = childPathOf(parent.path, name);
             const childFsPath = toFsPath(childDbPath);
 
             await fs.mkdir(childFsPath);
@@ -47,20 +47,10 @@ export class FileController{
                 type: 1,
                 permissions: 0o755,
             } as File;
+
             await fileRepo.save(directory);
-            return res.status(201).json({
-                ino:stats.ino.toString(),
-                path:directory.path,
-                type:directory.type,
-                permission:directory.permissions,
-                owner: user.uid,
-                group: userGroup?.gid ?? null,
-                size: stats.size.toString(),
-                atime: stats.atime.getTime(),
-                mtime: stats.mtime.getTime(),
-                ctime: stats.ctime.getTime(),
-                btime: stats.birthtime.getTime(),
-            });
+
+            return res.status(201).json(toEntryJson(directory, stats));
         }catch(err:any){
             if (err?.code === "EEXIST") {
                 return res.status(409).json({ error: "EEXIST", message: "Folder already exists" });
@@ -73,23 +63,23 @@ export class FileController{
     }
 
     public rmdir = async (req: Request, res: Response) => {
-        const parentIno=BigInt(req.params.parentIno);
+        const parentIno=parseIno(req.params.parentIno);
         const name = req.params.name;
 
         if(!parentIno)
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
-        if (!name || typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+        if (isBadName(name))
             return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
 
-        const user = req.user as User;
-        if (user === null) {
+        const user = req.user as User | undefined;
+        if (!user) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
         try {
             const parent= await fileRepo.findOne({
                 where:{ino:parentIno},
                 relations:["owner","group"],
-            })as File;
+            })as File | null;
             if (!parent){
                 return res.status(404).json({ error: "ENOENT", message: `Parent inode ${parentIno} not found` });
             }
@@ -97,13 +87,13 @@ export class FileController{
             if(!has_permissions(parent,1,user)){
                 return res.status(403).json({ error: "EACCES", message: `No permission to remove in ${parent.path}` });
             }
-            const childDbPath = parent.path === "/" ? `/${name}` : `${parent.path}/${name}`;
+            const childDbPath = childPathOf(parent.path, name);
             const childFsPath = toFsPath(childDbPath);
 
             const child= await fileRepo.findOne({
                 where: { path: childDbPath },
                 relations: ["owner", "group"],
-            }) as File;
+            }) as File | null;
 
             if(!child){
                 return res.status(404).json({ error: "ENOENT", message: "Directory not found" });
@@ -137,16 +127,16 @@ export class FileController{
     }
 
     public create = async (req: Request, res: Response) => {
-        const parentIno=BigInt(req.params.parentIno);
+        const parentIno=parseIno(req.params.parentIno);
         const name = req.params.name;
 
         if(!parentIno)
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
-        if (!name || typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+        if (isBadName(name))
             return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
 
-        const user = req.user as User;
-        if (user === null) {
+        const user = req.user as User | undefined;
+        if (!user) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
 
@@ -167,7 +157,7 @@ export class FileController{
                 return res.status(403).json({ error: "EACCES", message: `No permission to create in ${parent.path}` });
             }
 
-            const childDbPath = parent.path === "/" ? `/${name}` : `${parent.path}/${name}`;
+            const childDbPath = childPathOf(parent.path, name);
             const childFsPath = toFsPath(childDbPath);
 
             await fs.writeFile(childFsPath, "", { flag: "wx" });
@@ -179,22 +169,10 @@ export class FileController{
                 group: userGroup ?? null,
                 type: 0,
                 permissions: 0o644,
-            }
+            } as File;
             await fileRepo.save(file);
 
-            return res.status(201).json({
-                ino: stats.ino.toString,
-                path: file.path,
-                type: file.type,
-                permission: file.permissions,
-                owner: user.uid,
-                group: userGroup?.gid ?? null,
-                size: stats.size.toString(),
-                atime: stats.atime.getTime(),
-                mtime: stats.mtime.getTime(),
-                ctime: stats.ctime.getTime(),
-                btime: stats.birthtime.getTime(),
-            })
+            return res.status(201).json(toEntryJson(file, stats));
         }catch(err:any){
             console.log(err);
             if (err?.code === "EEXIST") {
@@ -212,16 +190,16 @@ export class FileController{
     }
 
     public unlink = async (req: Request, res: Response) => {
-        const parentIno=BigInt(req.params.parentIno);
+        const parentIno=parseIno(req.params.parentIno);
         const name = req.params.name;
 
         if(!parentIno)
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
-        if (!name || typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+        if (isBadName(name))
             return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
 
-        const user = req.user as User;
-        if (user === null) {
+        const user = req.user as User | undefined;
+        if (!user) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
 
@@ -241,7 +219,7 @@ export class FileController{
             const child=await fileRepo.findOne({
                 where: {path:childDbPath},
                 relations:["owner","group"],
-            })as File;
+            })as File | null;
             if (!child){
                 return res.status(404).json({ error: "ENOENT", message: "File metadata not found in database" });
             }
@@ -268,17 +246,16 @@ export class FileController{
     }
 
     public rename = async (req: Request, res: Response) => {
-        const oldParentIno=BigInt(req.params.oldParentIno);
+        const oldParentIno=parseIno(req.params.oldParentIno);
         const oldName=req.params.oldName;
 
         const {newParentIno, newName} =req.body ?? {};
-        const newParentInode=BigInt(newParentIno);
-        const badName = (s: any) => typeof s !== "string" || s === "" || s === "." || s === ".." ;
+        const newParentInode=parseIno(newParentIno);
         if(!oldParentIno || !newParentInode){
             return res.status(400).json({ error: "EINVAL", message: "Invalid parent inode(s)" });
         }
 
-        if(badName(oldName) || badName(newName)){
+        if(isBadName(oldName) || isBadName(newName)){
             return res.status(400).json({ error: "EINVAL", message: "Invalid name(s)" });
         }
 
@@ -302,12 +279,12 @@ export class FileController{
                 return res.status(403).json({ error: "EACCES", message: `Insufficient permissions` });
             }
 
-            const oldPath = oldParent.path === "/" ? `/${oldName}` : `${oldParent.path}/${oldName}`;
-            const newPath = newParent.path === "/" ? `/${newName}` : `${newParent.path}/${newName}`;
+            const oldPath = childPathOf(oldParent.path, oldName);
+            const newPath = childPathOf(newParent.path, newName);
             const fullOld = toFsPath(oldPath);
             const fullNew = toFsPath(newPath);
 
-            const entry = await fileRepo.findOne({ where: { path: oldPath }, relations: ["owner","group"] }) as File;
+            const entry = await fileRepo.findOne({ where: { path: oldPath }, relations: ["owner","group"] }) as File | null;
             if (!entry) 
                 return res.status(404).json({ error: "ENOENT", message: "Source entry not found" });
 
@@ -323,19 +300,7 @@ export class FileController{
             await fileRepo.update({ino:entry.ino}, { path: newPath });
             console.log("saved");
             const stats=await fs.lstat(fullNew,{bigint:true});
-            return res.status(200).json({
-                ino: entry.ino.toString(),
-                path: newPath,
-                type: entry.type,
-                permissions: entry.permissions,
-                owner: entry.owner?.uid ?? null,
-                group: entry.group?.gid ?? null,
-                size: stats.size.toString(),
-                atime: stats.atime.getTime(),
-                mtime: stats.mtime.getTime(),
-                ctime: stats.ctime.getTime(),
-                btime: stats.birthtime.getTime(),
-            })
+            return res.status(200).json(toEntryJson(entry, stats));
         }catch(err:any){
             return res.status(500).json({ error: "EIO", message: "Not possible to rename", details: String(err?.message ?? err) });
         }
