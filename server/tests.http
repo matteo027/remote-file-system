@@ -34,35 +34,47 @@ Content-Type: application/json
 
 ###
 
-GET http://localhost:3000/api/directories/5000
+GET http://localhost:3000/api/directories/0
 Content-Type: application/json
 
 {}
 
 ###
 
-POST http://localhost:3000/api/directories/5000/prova
-
-###
-
-DELETE  http://localhost:3000/api/directories/5000/prova
-
-###
-POST http://localhost:3000/api/files/5000/prova.txt
-
-###
-PUT http://localhost:3000/api/files/file.txt
+POST http://localhost:3000/api/directories/190192
 Content-Type: application/json
 
 {
-  "data": "ciao mondo"
+  "name": "prova"
+}
+
+###
+
+DELETE  http://localhost:3000/api/directories/190192
+Content-Type: application/json
+
+{
+  "name": "prova"
+}
+
+###
+POST http://localhost:3000/api/files/190192
+Content-Type: application/json
+
+{
+  "name": "pippo.txt"
 }
 
 ###
 GET http://localhost:3000/api/files/file2.txt
 
 ###
-DELETE   http://localhost:3000/api/files/5000/prova.txt
+DELETE   http://localhost:3000/api/files/190192
+Content-Type: application/json
+
+{
+  "name": "pippo.txt"
+}
 
 ###
 PATCH http://localhost:3000/api/files/5000/prova.txt
