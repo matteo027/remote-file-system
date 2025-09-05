@@ -9,13 +9,6 @@ export const fileRepo = AppDataSource.getRepository(File);
 export const userRepo = AppDataSource.getRepository(User);
 export const groupRepo = AppDataSource.getRepository(Group);
 
-export function normalizePath(input?: string | string[]): string {
-    const raw = Array.isArray(input) ? input.join('/'): (input ?? '');
-    const replaced = raw.replace(/\\/g, '/');
-    // 3) normalizza POSIX (rimuove ".", "..", doppi slash, ecc.)
-    return path_manipulator.posix.normalize('/' + replaced);
-}
-
 export function toFsPath(dbPath: string): string {
   return path_manipulator.join(FS_ROOT, dbPath);
 }

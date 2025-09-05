@@ -30,71 +30,58 @@ Content-Type: application/json
 
 {}
 
+###
 
+// Get attributes of file with inode 1
+GET http://localhost:3000/api/files/1/attributes
+
+###
+// Lookup file named "file2.txt" in directory with inode 190192
+GET http://localhost:3000/api/directories/190192/entries/file2.txt/lookup
 
 ###
 
-GET http://localhost:3000/api/directories/0
-Content-Type: application/json
+// List entries in root directory (inode 1)
+GET http://localhost:3000/api/directories/1/entries
 
-{}
 
 ###
+// Create a new directory named "prova" in directory with inode 190192
+POST http://localhost:3000/api/directories/190192/dirs/prova
 
-POST http://localhost:3000/api/directories/190192
+###
+// Remove the directory named "prova" in directory with inode 190192
+DELETE  http://localhost:3000/api/directories/190192/dirs/prova
+
+###
+// Create a new file named "pippo.txt" in directory with inode 1
+POST http://localhost:3000/api/directories/1/files/prova.txt
+
+###
+// Delete the file named "pippo.txt" in directory with inode 190192
+DELETE   http://localhost:3000/api/directories/190192/files/pippo.txt
+
+###
+// Rename the file "prova.txt" to "prova_modificato.txt" in directory with inode 1
+PATCH http://localhost:3000/api/directories/1/entries/prova.txt
 Content-Type: application/json
 
 {
-  "name": "prova"
+  "newParentIno": 1,
+  "newName": "prova_modificato.txt"
 }
 
 ###
-
-DELETE  http://localhost:3000/api/directories/190192
+// Change the mode of the file with inode 190192 to 0o444
+PATCH  http://localhost:3000/api/files/190192/attributes
 Content-Type: application/json
 
 {
-  "name": "prova"
+  "perm": 493
 }
 
-###
-POST http://localhost:3000/api/files/190192
-Content-Type: application/json
-
-{
-  "name": "pippo.txt"
-}
 
 ###
 GET http://localhost:3000/api/files/file2.txt
 
-###
-DELETE   http://localhost:3000/api/files/190192
-Content-Type: application/json
 
-{
-  "name": "pippo.txt"
-}
-
-###
-PATCH http://localhost:3000/api/files/5000/prova.txt
-Content-Type: application/json
-
-{
-  "new_name": "prova_modificato.txt"
-}
-
-
-###
-PATCH  http://localhost:3000/api/files/attributes/file.txt
-Content-Type: application/json
-
-{
-  "mode": 292
-}
-
-###
-GET http://localhost:3000/api/files/attributes/
-Content-Type: application/json
-
-{}

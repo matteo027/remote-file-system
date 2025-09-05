@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { fileRepo,userRepo,toFsPath,has_permissions,normalizePath} from './utility';
+import { fileRepo,userRepo,toFsPath,has_permissions} from './utility';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import * as fs from 'node:fs/promises';
@@ -7,7 +7,6 @@ import * as fs from 'node:fs/promises';
 export class AttributeController{
     public readdir = async (req: Request, res: Response) => {
         const inoRec = BigInt(req.params.ino);
-        console.log(inoRec)
         if(!inoRec) 
             return res.status(400).json({message:"Missing ino"});
 
@@ -105,7 +104,7 @@ export class AttributeController{
                     file.owner=user;
                     file.group=user.group?? null;
                 }
-                await fileRepo.save(file);
+                await fileRepo.update({ino:file.ino}, { owner: file.owner, group: file.group });
             }
 
             let newPerm: number|undefined;
@@ -131,6 +130,7 @@ export class AttributeController{
 
             if(newPerm !== undefined && newPerm != file.permissions){
                 file.permissions=newPerm;
+                await fileRepo.update({ino:file.ino}, { permissions: newPerm });
             }
 
             if(newSize != undefined){
@@ -140,17 +140,15 @@ export class AttributeController{
                 await fs.truncate(fullFsPath, newSize);
             }
 
-            await fileRepo.save(file);
-
             const stats=await fs.lstat(fullFsPath,{bigint:true});
             return res.status(200).json({
-                ino: file.ino.toString,
+                ino: file.ino.toString(),
                 path: file.path,
                 type: file.type,
                 permission: file.permissions,
                 owner: file.owner?.uid ?? null,
                 group: file.group?.gid ?? null,
-                size: stats.size,
+                size: stats.size.toString(),
                 atime: stats.atime.getTime(),
                 mtime: stats.mtime.getTime(),
                 ctime: stats.ctime.getTime(),
@@ -166,31 +164,96 @@ export class AttributeController{
         }
     }
 
+    // serve per ottenere l'ino del file figlio dato il nome e l'ino della cartella padre
     public lookup = async (req: Request, res: Response) => {
+        const parentIno=BigInt(req.params.parentIno);
+        const name= req.params.name;
+
+        if(!parentIno)
+            return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
+        if (!name || typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+            return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
+
+        try{
+            const parentDir=await fileRepo.findOne({where:{ino:parentIno}, relations:['owner','group']}) as File;
+            if(!parentDir)
+                return res.status(404).json({ error: "ENOENT", message: "Parent directory not found" });
+            if(parentDir.type !==1)
+                return res.status(400).json({ error: "ENOTDIR", message: "Parent is not a directory" });
+
+            if(!has_permissions(parentDir,0, req.user as User))
+                return res.status(403).json({ error: "EACCES", message: `No permission to read ${parentDir.path}` });
+
+            const childDbPath = parentDir.path === "/" ? `/${name}` : `${parentDir.path}/${name}`;
+            const childFsPath = toFsPath(childDbPath);
+
+            let stats;
+            try{
+                stats = await fs.lstat(childFsPath, { bigint: true });
+            } catch (e:any){
+                if(e?.code === "ENOENT"){
+                    return res.status(404).json({ error: "ENOENT", message: `File ${name} not found in ${parentDir.path}` });
+                }
+                throw e;
+            }
+
+            const childFile = await fileRepo.findOne({
+                where: { ino: stats.ino },
+                relations: ["owner", "group"],
+            }) as File;
+
+            if (!childFile) {
+                // mismatch FS↔DB
+                return res.status(500).json({ error: "EIO", message: `Mismatch FS/DB for ${childDbPath} (ino=${stats.ino})` });
+            }
+
+            return res.status(200).json({
+                ino: childFile.ino.toString(),
+                path: childFile.path,
+                type: childFile.type,
+                permission: childFile.permissions,
+                owner: childFile.owner?.uid ?? null,
+                group: childFile.group?.gid ?? null,
+                size: stats.size.toString(),
+                atime: stats.atime.getTime(),
+                mtime: stats.mtime.getTime(),
+                ctime: stats.ctime.getTime(),
+                btime: stats.birthtime.getTime(),
+            });
+        }catch (err:any){
+            return res.status(500).json({
+                error: "EIO",
+                message: "Lookup failed",
+                details: String(err?.message ?? err),
+            });
+        }
     }
 
     public getattr = async (req: Request, res: Response) => {
-        const dbPath    = normalizePath(req.params.path);
-        const isModifiedHead = req.header('if-modified-since');
+        const inoRec=BigInt(req.params.ino);
+        const isModifiedHeader = req.header('if-modified-since');
+        if(!inoRec)
+            return res.status(400).json({ error: "EINVAL", message: "Invalid inode" });
 
-        if (dbPath == undefined)
-            return res.status(400).json({ error: 'Bad format: path parameter is missing' });
+        try{
+            const file = await fileRepo.findOne({
+                where:{ino:inoRec},
+                relations:["owner","group"],
+            }) as File | null;
 
-        try {
-            let file: File = await fileRepo.findOne({
-                where: { path: dbPath },
-                relations: ['owner', 'group']
-            }) as File;
-            if (file == null)
-                return res.status(404).json({ error: 'File not found' });
-            if (!has_permissions(file, 0, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to visualize the file ' + dbPath });
-            const stats = await fs.stat(toFsPath(dbPath));
+            if (!file)
+                return res.status(404).json({ error: "ENOENT", message: "File not found" });
+            
+            if(!has_permissions(file,0, req.user as User))
+                return res.status(403).json({ error: "EACCES", message: `You have not the permission to read ${file.path}` });
 
-            const lastModifiedSecond= Math.floor(stats.mtime.getTime() / 1000);
+            const fullFsPath=toFsPath(file.path);
+            const stats=await fs.lstat(fullFsPath,{bigint:true});
 
-            if (isModifiedHead){
-                const isModifiedMs = Date.parse(isModifiedHead);
+            const lastModifiedSecond = Math.floor(stats.mtime.getTime() / 1000);
+
+            if (isModifiedHeader) {
+                const isModifiedMs = Date.parse(isModifiedHeader);
                 if (!Number.isNaN(isModifiedMs)) {
                     const isModifiedSeconds = Math.floor(isModifiedMs / 1000);
                     if (lastModifiedSecond <= isModifiedSeconds) {
@@ -199,30 +262,29 @@ export class AttributeController{
                 }
             }
 
-            const lastModifiedHttp= new Date(lastModifiedSecond * 1000).toUTCString();
+            const lastModifiedHttp=(new Date(lastModifiedSecond * 1000)).toUTCString();
             res.setHeader('Last-Modified', lastModifiedHttp);
 
-            res.status(200).json({
-                ...file,
-                owner: file.owner.uid,
-                group: file.group?.gid,
-                size: stats.size,
+            return res.status(200).json({
+                ino: file.ino.toString(),
+                path: file.path,
+                type: file.type,
+                permission: file.permissions,
+                owner: file.owner?.uid ?? null,
+                group: file.group?.gid ?? null,
+                size: stats.size.toString(),
                 atime: stats.atime.getTime(),
                 mtime: stats.mtime.getTime(),
                 ctime: stats.ctime.getTime(),
-                btime: stats.birthtime.getTime()
+                btime: stats.birthtime.getTime(),
             });
-        } catch (err: any) {
-            if (err.code === 'ENOENT') {
-                res.status(404).json({ error: 'File not found' });
-            } else if (err.code === 'EACCES') {
-                res.status(403).json({ error: 'Access denied' });
-            } else {
-                console.error(err);
-                res.status(500).json({ error: 'Not possible to perform the operation ' + dbPath, details: err });
-            }
+        }catch (err:any){
+            if (err.code === 'ENOENT') 
+                return res.status(404).json({ error: 'File not found' });
+            if (err.code === 'EACCES') 
+                return res.status(403).json({ error: 'Access denied' });
+            console.error(err);
+            return res.status(500).json({ error: 'Not possible to perform the operation', details: err });
         }
     }
-
-
 }

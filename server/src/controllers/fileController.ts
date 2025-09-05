@@ -8,11 +8,11 @@ import * as fs from 'node:fs/promises';
 export class FileController{
     public mkdir = async (req: Request, res: Response) => {
         const parentIno=BigInt(req.params.parentIno);
-        const name: string | undefined = req.body?.name;
+        const name = req.params.name;
 
         if(!parentIno)
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
-        if (typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+        if (!name || typeof name !== "string" || name.length === 0 || name==="." || name==="..")
             return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
 
         const user: User = req.user as User;
@@ -74,11 +74,11 @@ export class FileController{
 
     public rmdir = async (req: Request, res: Response) => {
         const parentIno=BigInt(req.params.parentIno);
-        const name: string | undefined = req.body?.name;
+        const name = req.params.name;
 
         if(!parentIno)
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
-        if (typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+        if (!name || typeof name !== "string" || name.length === 0 || name==="." || name==="..")
             return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
 
         const user = req.user as User;
@@ -138,11 +138,11 @@ export class FileController{
 
     public create = async (req: Request, res: Response) => {
         const parentIno=BigInt(req.params.parentIno);
-        const name: string | undefined = req.body?.name;
+        const name = req.params.name;
 
         if(!parentIno)
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
-        if (typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+        if (!name || typeof name !== "string" || name.length === 0 || name==="." || name==="..")
             return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
 
         const user = req.user as User;
@@ -213,11 +213,11 @@ export class FileController{
 
     public unlink = async (req: Request, res: Response) => {
         const parentIno=BigInt(req.params.parentIno);
-        const name: string | undefined = req.body?.name;
+        const name = req.params.name;
 
         if(!parentIno)
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
-        if (typeof name !== "string" || name.length === 0 || name==="." || name==="..")
+        if (!name || typeof name !== "string" || name.length === 0 || name==="." || name==="..")
             return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
 
         const user = req.user as User;
@@ -271,10 +271,10 @@ export class FileController{
         const oldParentIno=BigInt(req.params.oldParentIno);
         const oldName=req.params.oldName;
 
-        const {newPIno, newName} =req.body ?? {};
-        const newParentIno=BigInt(newPIno);
+        const {newParentIno, newName} =req.body ?? {};
+        const newParentInode=BigInt(newParentIno);
         const badName = (s: any) => typeof s !== "string" || s === "" || s === "." || s === ".." ;
-        if(!oldParentIno || !newParentIno){
+        if(!oldParentIno || !newParentInode){
             return res.status(400).json({ error: "EINVAL", message: "Invalid parent inode(s)" });
         }
 
@@ -286,8 +286,8 @@ export class FileController{
 
         try{
             const[oldParent,newParent]=await Promise.all([
-                fileRepo.findOne({ where: { ino: oldParentIno! }, relations: ["owner","group"] }),
-                fileRepo.findOne({ where: { ino: newParentIno }, relations: ["owner","group"] }),
+                fileRepo.findOne({ where: { ino: oldParentIno }, relations: ["owner","group"] }),
+                fileRepo.findOne({ where: { ino: newParentInode }, relations: ["owner","group"] }),
             ]);
 
             if (!oldParent) 
@@ -320,12 +320,12 @@ export class FileController{
                     return res.status(409).json({ error: "EEXIST", message: "Target exists" });
                 throw err;
             }
-            entry.path=newPath;
-            await fileRepo.save(entry);
-            const stats=await fs.lstat(fullNew);
+            await fileRepo.update({ino:entry.ino}, { path: newPath });
+            console.log("saved");
+            const stats=await fs.lstat(fullNew,{bigint:true});
             return res.status(200).json({
                 ino: entry.ino.toString(),
-                path: entry.path,
+                path: newPath,
                 type: entry.type,
                 permissions: entry.permissions,
                 owner: entry.owner?.uid ?? null,

@@ -1,10 +1,18 @@
 import { Request, Response } from 'express';
-import { fileRepo,groupRepo,toFsPath,has_permissions,normalizePath} from './utility';
+import { fileRepo,groupRepo,toFsPath,has_permissions} from './utility';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import { Group } from '../entities/Group';
 import * as fs from 'node:fs/promises';
-import * as fsSync from 'node:fs'; // da rimuovere, meglio async 
+import * as fsSync from 'node:fs'; // da rimuovere, meglio async
+import path_manipulator from 'node:path'; 
+
+export function normalizePath(input?: string | string[]): string {
+    const raw = Array.isArray(input) ? input.join('/'): (input ?? '');
+    const replaced = raw.replace(/\\/g, '/');
+    // 3) normalizza POSIX (rimuove ".", "..", doppi slash, ecc.)
+    return path_manipulator.posix.normalize('/' + replaced);
+}
 
 
 export class ReadWriteController{
