@@ -1,3 +1,5 @@
+#![cfg(FALSE)] // per evitare che questo file venga compilato, al momento non serve
+
 use lru::LruCache;
 use rfs_models::{RemoteBackend, FileEntry, BackendError, SetAttrRequest, BLOCK_SIZE};
 use std::num::NonZeroUsize;

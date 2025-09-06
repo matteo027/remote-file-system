@@ -2,12 +2,11 @@ use httpdate::fmt_http_date;
 use reqwest::cookie::Jar;
 use reqwest::header::{self, HeaderMap, HeaderValue, CONTENT_TYPE};
 use reqwest::{Client, Method, Response, StatusCode, Url, Body};
-use rfs_models::{BackendError, FileEntry, RemoteBackend, SetAttrRequest};
+use rfs_models::{BackendError, EntryType, FileEntry, RemoteBackend, SetAttrRequest};
 use rpassword::read_password;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::ffi::OsStr;
 use std::io::{stdin, stdout, Cursor, Write};
 use std::path::PathBuf;
 use std::str::{ FromStr};
@@ -31,13 +30,16 @@ pub struct Credentials {
 
 #[derive(Deserialize,Debug)]
 struct FileServerResponse {
+    ino: u64,
     path: PathBuf,
+    name:String,
     owner: u32,
     group: Option<u32>,
     #[serde(rename = "type")]
-    ty: usize,
+    kind: EntryType,
     permissions: u16,
     size: u64,
+    nlinks:u32,
     #[serde(deserialize_with = "deserialize_systemtime_from_millis")]
     atime: SystemTime,
     #[serde(deserialize_with = "deserialize_systemtime_from_millis")]
@@ -45,7 +47,7 @@ struct FileServerResponse {
     #[serde(deserialize_with = "deserialize_systemtime_from_millis")]
     ctime: SystemTime,
     #[serde(deserialize_with = "deserialize_systemtime_from_millis")]
-    btime: SystemTime, 
+    btime: SystemTime,
 }
 
 pub struct HttpBackend {
@@ -120,19 +122,15 @@ where
 }
 
 fn response_to_entry(file: FileServerResponse) -> FileEntry {
-    let name = file.path.file_name()
-        .unwrap_or_else(|| OsStr::new("/"))
-        .to_string_lossy()
-        .to_string();
     let gid = file.group.unwrap_or(file.owner);
     FileEntry {
-        ino: 0, // Inode number is not used in this context, set to 0, check if needed in cache layer
+        ino: file.ino,
         path: file.path.to_string_lossy().to_string(),
-        name,
-        is_dir: (file.ty == 1) as bool,
+        name: file.name,
+        kind: file.kind,
         size: file.size,
         perms: file.permissions,
-        nlinks: if file.ty == 1 { 2 } else { 1 },
+        nlinks: file.nlinks,
         atime: file.atime,
         mtime: file.mtime,
         ctime: file.ctime,
@@ -224,20 +222,20 @@ impl HttpBackend {
 }
 
 impl RemoteBackend for HttpBackend {
-    fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>, BackendError> {
-        let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
+    fn list_dir(&mut self, ino: u64) -> Result<Vec<FileEntry>, BackendError> {
+        let endpoint = format!("api/directories/{}/entries", ino);
         let files: Vec<FileServerResponse> = self.request_response::<Vec<FileServerResponse>, ()>(Method::GET, &endpoint, None)?;
         Ok(files.into_iter().map(response_to_entry).collect())
     }
 
-    fn create_dir(&mut self, path: &str) -> Result<FileEntry, BackendError> {
-        let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
+    fn create_dir(&mut self, parent_ino:u64, name:&str) -> Result<FileEntry, BackendError> {
+        let endpoint = format!("api/directories/{}/dirs/{}", parent_ino, name);
         let f: FileServerResponse = self.request_response::<FileServerResponse, ()>(Method::POST, &endpoint, None)?;
         Ok(response_to_entry(f))
     }
 
-    fn delete_dir(&mut self, path: &str) -> Result<(), BackendError> {
-        let endpoint = format!("api/directories/{}", path.trim_start_matches('/'));
+    fn delete_dir(&mut self, parent_ino:u64, name:&str) -> Result<(), BackendError> {
+        let endpoint = format!("api/directories/{}/dirs/{}", parent_ino, name);
         let resp=self.raw_request::<()>(Method::DELETE, &endpoint,None)?;
         match resp.status(){
             StatusCode::OK => Ok(()),
@@ -245,14 +243,20 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn get_attr(&mut self, path: &str) -> Result<FileEntry, BackendError> {
-        let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
+    fn lookup(&mut self, parent_ino:u64, name:&str) -> Result<FileEntry, BackendError> {
+        let endpoint = format!("api/directories/{}/entries/{}/lookup", parent_ino, name);
         let f: FileServerResponse = self.request_response::<FileServerResponse, ()>(Method::GET, &endpoint, None)?;
         Ok(response_to_entry(f))
     }
 
-    fn get_attr_if_modified_since(&mut self, path: &str, since: SystemTime) -> Result<Option<FileEntry>, BackendError> {
-        let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
+    fn get_attr(&mut self, ino: u64) -> Result<FileEntry, BackendError> {
+        let endpoint = format!("api/files/{}/attributes", ino);
+        let f: FileServerResponse = self.request_response::<FileServerResponse, ()>(Method::GET, &endpoint, None)?;
+        Ok(response_to_entry(f))
+    }
+
+    fn get_attr_if_modified_since(&mut self, ino: u64, since: SystemTime) -> Result<Option<FileEntry>, BackendError> {
+        let endpoint = format!("api/files/{}/attributes", ino);
         let mut retried = false;
         loop {
             let url = self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
@@ -274,14 +278,14 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn create_file(&mut self, path: &str) -> Result<FileEntry, BackendError> {
-        let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
+    fn create_file(&mut self, parent_ino:u64, name:&str) -> Result<FileEntry, BackendError> {
+        let endpoint = format!("api/directories/{}/files/{}", parent_ino, name);
         let f: FileServerResponse = self.request_response::<FileServerResponse, ()>(Method::POST, &endpoint, None)?;
         Ok(response_to_entry(f))
     }
 
-    fn delete_file(&mut self, path: &str) -> Result<(), BackendError> {
-        let endpoint = format!("api/files/{}", path.trim_start_matches('/'));
+    fn delete_file(&mut self, parent_ino:u64, name:&str) -> Result<(), BackendError> {
+        let endpoint = format!("api/directories/{}/files/{}", parent_ino, name);
         let resp=self.raw_request::<()>(Method::DELETE, &endpoint, None)?;
         match resp.status(){
             StatusCode::OK => Ok(()),
@@ -289,9 +293,8 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn read_chunk(&mut self,path: &str, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
-        println!("Reading chunk from path: {}, offset: {}, size: {}", path, offset, size);
-        let endpoint = format!("api/files/{}?offset={}&size={}", path.trim_start_matches('/'), offset, size);
+    fn read_chunk(&mut self,ino: u64, offset: u64, size: u64) -> Result<Vec<u8>, BackendError> {
+        let endpoint = format!("api/files/{}?offset={}&size={}", ino, offset, size);
         let resp= self.raw_request::<()>(Method::GET, &endpoint, None)?;
         match resp.status(){
             StatusCode::OK | StatusCode::PARTIAL_CONTENT => {
@@ -304,8 +307,8 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn write_chunk(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
-        let endpoint = format!("api/files/{}?offset={}", path.trim_start_matches('/'), offset);
+    fn write_chunk(&mut self, ino: u64, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
+        let endpoint = format!("api/files/{}?offset={}", ino, offset);
         let url= self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req=self.client.request(Method::PUT, url).header(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream")).body(data);
         let resp= self.runtime.block_on(async {req.send().await}).map_err(|e| BackendError::Other(e.to_string()))?;
@@ -318,22 +321,25 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn rename(&mut self, old_path: &str, new_path: &str) -> Result<FileEntry, BackendError> {
-        let endpoint = format!("api/files/{}", old_path.trim_start_matches('/'));
-        let body = serde_json::json!({ "new_path": new_path.trim_start_matches('/') });
+    fn rename(&mut self, old_parent_ino:u64, old_name: &str, new_parent_ino: u64, new_name: &str) -> Result<FileEntry, BackendError> {
+        let endpoint = format!("api/directories/{}/entries/{}", old_parent_ino, old_name);
+        let body = serde_json::json!({
+            "newParentIno": new_parent_ino,
+            "newName": new_name
+        });
         let f: FileServerResponse = self.request_response::<FileServerResponse, Value>(Method::PATCH, &endpoint, Some(&body))?;
         Ok(response_to_entry(f))
     }
 
-    fn set_attr(&mut self,path: &str,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
-        let endpoint = format!("api/files/attributes/{}", path.trim_start_matches('/'));
+    fn set_attr(&mut self,ino: u64,attrs: SetAttrRequest) -> Result<FileEntry, BackendError> {
+        let endpoint = format!("api/files/{}/attributes", ino);
         let body = serde_json::to_value(attrs).map_err(|e| BackendError::Other(e.to_string()))?;
         let f: FileServerResponse = self.request_response::<FileServerResponse, Value>(Method::PATCH, &endpoint, Some(&body))?;
         Ok(response_to_entry(f))
     }
 
-    fn read_stream(&mut self, path: &str, offset: u64) -> Result<rfs_models::ByteStream, BackendError> {
-        let endpoint = format!("api/files/stream/{}?offset={}", path.trim_start_matches('/'), offset);
+    fn read_stream(&mut self, ino: u64, offset: u64) -> Result<rfs_models::ByteStream, BackendError> {
+        let endpoint = format!("api/files/stream/{}?offset={}", ino, offset);
         let resp= self.raw_request::<()>(Method::GET, &endpoint, None)?;
         match resp.status() {
             StatusCode::OK => {
@@ -344,8 +350,8 @@ impl RemoteBackend for HttpBackend {
         }
     }
 
-    fn write_stream(&mut self, path: &str, offset: u64, data: Vec<u8>) -> Result<(), BackendError> {
-        let endpoint = format!("api/files/stream/{}?offset={}", path.trim_start_matches('/'), offset);
+    fn write_stream(&mut self, ino: u64, offset: u64, data: Vec<u8>) -> Result<(), BackendError> {
+        let endpoint = format!("api/files/stream/{}?offset={}", ino, offset);
         println!("Writing stream to {}", endpoint);
         // using Cursor to transform Vec<u8> into a reader
         let cursor = Cursor::new(data);
