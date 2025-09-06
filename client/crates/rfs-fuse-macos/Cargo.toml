@@ -1,9 +1,0 @@
-[package]
-name = "rfs-fuse-macos"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-fuser = "0.15.1"
-libc = "0.2.174"
-rfs-models = { version = "0.1.0", path = "../rfs-models" }
