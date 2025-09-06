@@ -2,11 +2,9 @@ use clap::Parser;
 use daemonize::Daemonize;
 use fuser::{MountOption};
 use rfs_fuse::RemoteFS;
-#[cfg(target_os = "macos")]
-use rfs_fuse_macos::RemoteFS as RemoteFSMacOS;
 use std::{fs::{create_dir_all, File}, sync::{Arc, Condvar, Mutex}};
 use rfs_api::HttpBackend;
-use rfs_cache::Cache;
+//use rfs_cache::Cache;
 use signal_hook::{consts::signal::*, iterator::Signals};
 use std::thread;
 use tokio::runtime::Builder;
@@ -14,12 +12,15 @@ use tokio::runtime::Builder;
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
 struct Cli {
+    /// Directory di mount del filesystem remoto in locale
     #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
     mount_point: String,
 
+    /// Indirizzo del backend remoto
     #[arg(short, long, default_value = "http://fzucca.com:25570")]
     remote_address: String,
 
+    /// Abilita la modalità speed testing (solo Linux e windows)
     #[arg(long, action = clap::ArgAction::SetTrue)]
     speed_testing: bool,
 }
@@ -38,22 +39,23 @@ fn main() {
     };
     println!("Authentication successful.");
 
-    
+    let mut file_speed: Option<File> = None;
     #[cfg(target_os = "linux")]
     {
         let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
         let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
         if cli.speed_testing {
             println!("Speed testing mode enabled.");
-            let _speed = File::create("/tmp/remote-fs.speed-test.out").expect("Failed to create speed test log file");
+            file_speed = Some(File::create("/tmp/remote-fs.speed-test.out").expect("Failed to create speed test log file"));
         }
         let daemonize = Daemonize::new()
             .pid_file("/tmp/remote-fs.pid") // saves PID
             .stdout(stdout) // log stdout
             .stderr(stderr) // log stderr
             .working_directory("/")
-            .umask(0o027); // file's default permissions
-        
+            .umask(0o027); // file's default permission
+
+        daemonize.start().expect("Error, daemonization failed");
     }
 
     let options = vec![MountOption::FSName("Remote-FS".to_string()),MountOption::RW];
@@ -67,22 +69,8 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
-    let fs;
-    #[cfg(target_os = "linux")]
-    {
-        let speed_file = if cli.speed_testing {
-            Some(File::create("/tmp/remote-fs.speed-test.out").expect("Failed to create speed test log file"))
-        } else {
-            None
-        };
-
-        fs = RemoteFS::new(cache, runtime.clone(), cli.speed_testing, speed_file);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        fs = RemoteFSMacOS::new(cache);
-    }
+    //let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
+    let fs= RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, file_speed);
 
     create_dir_all(&cli.mount_point).expect("mount point does not exist and cannot be created");
     let session = fuser::spawn_mount2(fs, &cli.mount_point, &options).expect("failed to mount");
