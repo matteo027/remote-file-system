@@ -28,14 +28,9 @@ export function setRoutes(app: Express) {
 
     router.patch('/api/directories/:oldParentIno/entries/:oldName', isLoggedIn, fileController.rename); // rename
 
-    // router.put('/api/files/stream/:ino/contents', isLoggedIn, rwController.writeStream);
-    // router.get('/api/files/stream/:ino/contents', isLoggedIn, rwController.readStream);
-    // router.put('/api/files/:ino/contents', isLoggedIn, express.raw({type:'application/octet-stream', limit: '1gb'}), rwController.write);
-    // router.get('/api/files/:ino/contents', isLoggedIn, rwController.read);
-
-    router.put('/api/files/stream/{*path}', isLoggedIn, rwController.writeStream);
-    router.get('/api/files/stream/{*path}', isLoggedIn, rwController.readStream);
-    router.put('/api/files/{*path}', isLoggedIn, express.raw({type:'application/octet-stream', limit: '1gb'}), rwController.write);
-    router.get('/api/files/{*path}', isLoggedIn, rwController.read);
+    // router.put('/api/files/stream/:ino', isLoggedIn, rwController.writeStream);
+    // router.get('/api/files/stream/:ino', isLoggedIn, rwController.readStream);
+    // router.put('/api/files/:ino', isLoggedIn, express.raw({type:'application/octet-stream', limit: '1gb'}), rwController.write);
+    // router.get('/api/files/:ino', isLoggedIn, rwController.read);
 
 }

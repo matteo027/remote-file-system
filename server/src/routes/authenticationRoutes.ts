@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { FileSystemController } from '../controllers/filesystemController';
 import { Express } from 'express-serve-static-core';
 import passport from 'passport';
 import { AuthenticationController } from '../controllers/authenticationController';

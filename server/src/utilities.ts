@@ -27,16 +27,19 @@ export function parseIno(s:any): bigint|null{
 export function toEntryJson(file:File, stats: Stats|BigIntStats) {
     return {
         ino: file.ino.toString(),
+        name: path_manipulator.basename(file.path),
         path: file.path,
         type: file.type,
         permissions: file.permissions,
         owner: file.owner.uid,
         group: file.group?.gid,
-        size: (stats.size as bigint | number).toString(),
+        size: stats.size.toString(),
         atime: stats.atime.getTime(),
         mtime: stats.mtime.getTime(),
         ctime: stats.ctime.getTime(),
-        btime: stats.birthtime.getTime()
+        btime: stats.birthtime.getTime(),
+
+        nlinks: stats.nlink as number,
     };
 }
 

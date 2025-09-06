@@ -10,7 +10,6 @@ import cors from 'cors';
 import { AuthenticationController } from './controllers/authenticationController';
 import { File } from './entities/File';
 import { promises as fs } from 'fs';
-import path from 'path';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
