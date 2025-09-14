@@ -55,7 +55,7 @@ fn main() {
             .working_directory("/")
             .umask(0o027); // file's default permission
 
-        //daemonize.start().expect("Error, daemonization failed");
+        daemonize.start().expect("Error, daemonization failed");
     }
 
     let options = vec![MountOption::FSName("Remote-FS".to_string()),MountOption::RW];
