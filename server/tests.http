@@ -46,29 +46,29 @@ GET http://localhost:3000/api/directories/1/entries
 
 
 ###
-// Create a new directory named "prova" in directory with inode 190192
-POST http://localhost:3000/api/directories/190192/dirs/prova
+// Create a new directory named "prova" in directory with inode 1
+POST http://localhost:3000/api/directories/1/dirs/prova
 
 ###
-// Remove the directory named "prova" in directory with inode 190192
-DELETE  http://localhost:3000/api/directories/190192/dirs/prova
+// Remove the directory named "prova" in directory with inode 1
+DELETE  http://localhost:3000/api/directories/1/dirs/prova
 
 ###
 // Create a new file named "pippo.txt" in directory with inode 1
-POST http://localhost:3000/api/directories/1/files/prova.txt
+POST http://localhost:3000/api/directories/1/files/pippo.txt
 
 ###
-// Delete the file named "pippo.txt" in directory with inode 190192
-DELETE   http://localhost:3000/api/directories/190192/files/pippo.txt
+// Delete the file named "pippo.txt" in directory with inode 1
+DELETE   http://localhost:3000/api/directories/1/files/pippo.txt
 
 ###
-// Rename the file "prova.txt" to "prova_modificato.txt" in directory with inode 1
-PATCH http://localhost:3000/api/directories/1/entries/prova.txt
+// Rename the file "pippo.txt" to "pippo_modificato.txt" in directory with inode 1
+PATCH http://localhost:3000/api/directories/1/entries/pippo.txt
 Content-Type: application/json
 
 {
   "newParentIno": 1,
-  "newName": "prova_modificato.txt"
+  "newName": "pippo_modificato.txt"
 }
 
 ###
@@ -83,5 +83,4 @@ Content-Type: application/json
 
 ###
 GET http://localhost:3000/api/files/file2.txt
-
 

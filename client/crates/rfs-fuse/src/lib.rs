@@ -209,6 +209,8 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
     fn lookup(&mut self, req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let timer_start = Instant::now();
 
+        println!("lookup called for name {:?} in parent ino {}", name, parent);
+
         let metadata=match self.backend.lookup(parent,&name.to_string_lossy()) {
             Ok(entry) => entry,
             Err(e) => {
@@ -231,6 +233,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
     fn getattr(&mut self, req: &Request<'_>, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         let timer_start = Instant::now();
         //fh serve poi quando si fa read/write
+        println!("getattr called for ino {}", ino);
         match self.backend.get_attr(ino) {
             Ok(entry) => {
                 let attr = entry_to_attr(&entry, req);

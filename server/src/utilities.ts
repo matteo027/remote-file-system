@@ -39,7 +39,7 @@ export function toEntryJson(file:File, stats: Stats|BigIntStats) {
         ctime: stats.ctime.getTime(),
         btime: stats.birthtime.getTime(),
 
-        nlinks: stats.nlink as number,
+        nlinks: Number(stats.nlink),
     };
 }
 

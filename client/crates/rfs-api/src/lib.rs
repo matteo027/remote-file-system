@@ -30,7 +30,7 @@ pub struct Credentials {
 
 #[derive(Deserialize,Debug)]
 struct FileServerResponse {
-    ino: u64,
+    ino: String,
     path: PathBuf,
     name:String,
     owner: u32,
@@ -38,7 +38,7 @@ struct FileServerResponse {
     #[serde(rename = "type")]
     kind: EntryType,
     permissions: u16,
-    size: u64,
+    size: String,
     nlinks:u32,
     #[serde(deserialize_with = "deserialize_systemtime_from_millis")]
     atime: SystemTime,
@@ -124,11 +124,11 @@ where
 fn response_to_entry(file: FileServerResponse) -> FileEntry {
     let gid = file.group.unwrap_or(file.owner);
     FileEntry {
-        ino: file.ino,
+        ino: file.ino.parse::<u64>().unwrap_or(0),
         path: file.path.to_string_lossy().to_string(),
         name: file.name,
         kind: file.kind,
-        size: file.size,
+        size: file.size.parse::<u64>().unwrap_or(0),
         perms: file.permissions,
         nlinks: file.nlinks,
         atime: file.atime,

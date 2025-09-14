@@ -3,6 +3,7 @@ use thiserror::Error;
 use serde::{Deserialize, Serialize};
 use tokio_stream::Stream;
 use bytes::Bytes;
+use serde_repr::Deserialize_repr;
 
 pub const BLOCK_SIZE: usize = 16 * 1024; // 16KB
 
@@ -37,11 +38,12 @@ pub struct FileEntry {
     pub nlinks: u32,
 }
 
-#[derive(Debug,Clone,Deserialize,PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize_repr)]
+#[repr(u8)]
 pub enum EntryType {
-    File=0,
-    Directory=1,
-    Symlink=2,
+    File = 0,
+    Directory = 1,
+    Symlink = 2,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
