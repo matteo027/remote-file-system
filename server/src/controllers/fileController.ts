@@ -140,9 +140,9 @@ export class FileController{
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
 
-        const userGroup= await groupRepo.findOne({where: {users:user}}) as Group;
+        const userGroup = await groupRepo.findOne({where: {users:user}}) as Group;
         try{
-            const parent=await fileRepo.findOne({
+            const parent = await fileRepo.findOne({
                 where:{ino:parentIno},
                 relations:["owner","group"]
             }) as File;

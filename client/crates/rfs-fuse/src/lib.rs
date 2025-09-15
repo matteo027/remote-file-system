@@ -146,8 +146,8 @@ impl<B: RemoteBackend> RemoteFS<B> {
 
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
 
-        let mut start_offset = None;
-        let mut last_offset = None;
+        let mut start_offset = 0 as u64;
+        let mut last_offset = 0 as u64;
         // Collect the map's contents into a vector to avoid double mutable borrow
         let map_entries: Vec<(u64, Vec<u8>)> = {
             let map: &mut BTreeMap<u64, Vec<u8>> = self.write_buffers.get_mut(&fh).unwrap();
@@ -159,26 +159,21 @@ impl<B: RemoteBackend> RemoteFS<B> {
         let mut buffer = Vec::<u8>::new();
         for (off, data) in map_entries.iter() {
 
-            if None == start_offset {
-                start_offset = Some(*off);
-                last_offset = Some(*off);
-            }
-
-            if last_offset.unwrap() + page_size == *off {
-                last_offset = Some(*off);
+            if last_offset + page_size == *off {
+                last_offset = *off;
                 buffer.extend_from_slice(&data);
             } else {
                 // Flush the current buffer
-                self.flush_buffer(&mut buffer, ino, start_offset.unwrap())?;
+                self.flush_buffer(&mut buffer, ino, start_offset)?;
 
-                start_offset = Some(*off);
-                last_offset = Some(*off);
+                start_offset = *off;
+                last_offset = *off;
                 buffer.extend_from_slice(&data);
             }
         }
 
         // flushing last bytes
-        self.flush_buffer(&mut buffer, ino, start_offset.unwrap())?;
+        self.flush_buffer(&mut buffer, ino, start_offset)?;
 
         Ok(())
     }
@@ -311,7 +306,6 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
             Err(e) => reply.error(map_error(&e)),
         }
-
         if self.speed_testing {
             let duration = timer_start.elapsed();
             if let Some(file) = self.speed_file.as_mut() {
@@ -647,21 +641,24 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
     }
 
-    // called when a fd closes
-    fn flush(&mut self,_req: &Request<'_>, ino: u64, fh: u64,_lock_owner: u64,reply: ReplyEmpty) {
+    // called when a fd closes (and not only!)
+    fn flush(&mut self,_req: &Request<'_>, ino: u64, fh: u64,_lock_owner: u64, reply: ReplyEmpty) {
 
         let timer_start = Instant::now();
         
         if self.write_buffers.contains_key(&fh) {
             match self.flush_file(fh, ino) {
-                Ok(_bytes_written) => reply.ok(),
+                Ok(_bytes_written) => {
+                    reply.ok()
+                },
                 Err(e) => {
                     reply.error(map_error(&e));
-                    return;
                 }
             }
 
             self.write_buffers.remove(&fh); // removes the write buffer associated with this file handle
+        } else {
+            reply.ok(); // nothing to flush
         }
 
         if self.speed_testing {

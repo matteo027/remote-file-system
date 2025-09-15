@@ -32,7 +32,7 @@ export function toEntryJson(file:File, stats: Stats|BigIntStats) {
         type: file.type,
         permissions: file.permissions,
         owner: file.owner.uid,
-        group: file.group?.gid,
+        group: file.group?.gid && null,
         size: stats.size.toString(),
         atime: stats.atime.getTime(),
         mtime: stats.mtime.getTime(),
