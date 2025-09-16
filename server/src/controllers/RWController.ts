@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { fileRepo,groupRepo,toFsPath,has_permissions} from '../utilities';
+import { fileRepo,groupRepo,toFsPath,has_permissions, parseIno} from '../utilities';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import { Group } from '../entities/Group';
@@ -195,10 +195,12 @@ export class ReadWriteController{
     }
 
     public write = async (req: Request, res: Response) => {
-        const dbPath = normalizePath(req.params.path);
-        const fullFsPath = toFsPath(dbPath);
-        const user: User = req.user as User;
+        const ino = parseIno(req.params.ino);
         const offset = Number(req.query.offset) || 0;
+        const user: User = req.user as User;
+
+        if (!ino)
+            return res.status(400).json({ error: "EINVAL", message: "Inode missing" });
         if (offset < 0) {
             return res.status(400).json({ error: 'Bad request: invalid offset' });
         }
@@ -211,21 +213,22 @@ export class ReadWriteController{
             return res.status(400).json({ error: 'Bad request: invalid body' });    
         }
         try {
-            const file= await fileRepo.findOne({
-                where: { path: dbPath },
-                relations: ['owner', 'group']
-            });
+            const file = await fileRepo.findOne({
+                where:{ino},
+                relations:["owner","group"]
+            }) as File;
             if(!file)
                 return res.status(404).json({ error: 'File not found' });
+            const fullFsPath = toFsPath(file.path);
             if (!has_permissions(file, 1, user))
-                return res.status(403).json({ error: 'You have not the permission to write the content the file ' + dbPath });
+                return res.status(403).json({ error: 'You have not the permission to write the content the file ' + file.path });
             const fh=await fs.open(fullFsPath, 'r+');
             try {
                 await fh.write(buffer, 0, buffer.length, offset);
             } finally {
                 await fh.close();
             }
-            if (dbPath === '/create-user.txt') {
+            if (file.path === '/create-user.txt') {
                 try {
                     const text = buffer.toString('utf8');
                     const fields = text.trim().split(/\s+/);
@@ -258,7 +261,7 @@ export class ReadWriteController{
                     await fs.writeFile(fullFsPath, `Error: ${err.message || String(err)}`);
                     return res.status(500).json({ error: 'Internal server error' });
                 }
-            } else if (dbPath === '/create-group.txt') {
+            } else if (file.path === '/create-group.txt') {
                 try {
                     const text = buffer.toString('utf8');
                     const fields = text.trim().split(/\s+/);
@@ -303,29 +306,34 @@ export class ReadWriteController{
             } else if (err.code === 'EISDIR') {
             return res.status(400).json({ error: 'Is a directory' });
             } else {
-            return res.status(500).json({ error: 'Not possible to write the file ' + dbPath, details: String(err) });
+            return res.status(500).json({ error: 'Not possible to write into the inode ' + ino, details: String(err) });
             }
         }
     }
 
     public read = async (req: Request, res: Response) => {
-        const dbPath = normalizePath(req.params.path);
-        const fullFsPath = toFsPath(dbPath);
-
-        const offset = Number(req.query.offset) || 0;
+        const ino = parseIno(req.params.ino);
+        const offset = Number(req.params.offset) || 0;
         const size = Number(req.query.size) || 4096;
         const user: User = req.user as User;
 
+        if (!ino)
+            return res.status(400).json({ error: "EINVAL", message: "Inode missing" });
+        if (offset < 0 || size <= 0) {
+            return res.status(400).json({ error: 'Bad request: invalid offset or size' });
+        }
+
         try {
             const file: File = await fileRepo.findOne({
-                where: { path: dbPath },
+                where: { ino },
                 relations: ['owner', 'group']
             }) as File;
             if (file === null)
                 return res.status(404).json({ error: 'File not found' });
             if (!has_permissions(file, 0, user))
-                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + dbPath });
+                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + file.path });
 
+            const fullFsPath = toFsPath(file.path);
             const fd = await fs.open(fullFsPath, 'r');
             try {
                 const buffer = Buffer.alloc(size);
@@ -344,7 +352,7 @@ export class ReadWriteController{
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to read the file ' + dbPath, details: err });
+                res.status(500).json({ error: 'Not possible to read the inode ' + ino, details: err });
             }
         }
 

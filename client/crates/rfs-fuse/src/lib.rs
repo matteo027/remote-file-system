@@ -113,7 +113,7 @@ pub struct RemoteFS<B: RemoteBackend> {
 
     // file handle management
     next_fh: u64, // file handle da allocare
-    file_handles: HashMap<u64, ReadMode>, // mappa file handle, per gestire read in streaming continuo su file già aperti
+    read_file_handles: HashMap<u64, ReadMode>, // mappa file handle, per gestire read in streaming continuo su file già aperti
     write_buffers: HashMap<u64, BTreeMap<u64, Vec<u8>>>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
 
     // opzioni di testing
@@ -128,7 +128,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
             rt: runtime,
             //nlookup: HashMap::new(),
             next_fh: 3, //0,1,2 di solito sono assegnati, da controllare
-            file_handles: HashMap::new(),
+            read_file_handles: HashMap::new(),
             write_buffers: HashMap::new(),
             speed_testing,
             speed_file,
@@ -301,7 +301,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 let fh=self.next_fh;
                 self.write_buffers.insert(fh, BTreeMap::new()); // used for buffering writes
                 self.next_fh += 1; // incrementa il file handle per il prossimo file
-                self.file_handles.insert(fh, ReadMode::SmallPages); // inizializza il
+                self.read_file_handles.insert(fh, ReadMode::SmallPages); // inizializza il
                 reply.created(&TTL_FILE, &attr, 0, fh, fuser::consts::FOPEN_DIRECT_IO); // FOPEN_KEEP_CACHE se vuoi mantenere la cache del kernel
             }
             Err(e) => reply.error(map_error(&e)),
@@ -408,7 +408,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 (consts::FOPEN_KEEP_CACHE, ReadMode::SmallPages)
             };
             fuse_flags = ff;
-            self.file_handles.insert(fh, mode);
+            self.read_file_handles.insert(fh, mode);
         }
         if (flags & O_ACCMODE) == O_WRONLY || (flags & O_ACCMODE) == O_RDWR {
             self.write_buffers.insert(fh, BTreeMap::new());
@@ -438,7 +438,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             return;
         }
 
-        let Some(mut handle) = self.file_handles.get_mut(&fh) else {
+        let Some(mut handle) = self.read_file_handles.get_mut(&fh) else {
             if self.write_buffers.contains_key(&fh) {
                 reply.error(EBADF);
                 return;
@@ -527,7 +527,8 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
 
     fn release(&mut self, _req: &Request<'_>, _ino: u64, fh: u64, _flags: i32, _lock_owner: Option<u64>, _flush: bool, reply: ReplyEmpty) {
         // Rimuoviamo il file handle dalla mappa, basta per fare drop automatico della stream e chiuderla immediatamente
-        self.file_handles.remove(&fh);
+        self.read_file_handles.remove(&fh);
+        self.write_buffers.remove(&fh); // rimuove anche il buffer di scrittura, se esiste
         reply.ok();
     }
 
@@ -535,16 +536,14 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         let timer_start = Instant::now();
 
         if !self.write_buffers.contains_key(&fh) {
-            if self.file_handles.contains_key(&fh) {
-                reply.error(EBADF);
-                return;
-            }
             reply.error(ENOENT);
             return;
         }
 
         let mut off= offset as u64;
+        println!("Offset before the checks: {}", off);
         if flags & libc::O_APPEND != 0 {
+            println!("Append mode write requested for ino {}", ino);
             match self.backend.get_attr(ino) {
                 Ok(entry) => off = entry.size,
                 Err(e) => {
@@ -553,17 +552,16 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 }
             }
         }
-
+        println!("Offset after the checks: {}", off);
         if self.write_buffers.get(&fh).is_none() {
             reply.error(EBADF); // File handle not found
-            return;
+        } else {
+            // Scope to limit the mutable borrow of write_buffers
+            let buffer = self.write_buffers.get_mut(&fh).unwrap();
+            buffer.insert(off, data.to_vec());
+
+            reply.written(data.len() as u32);
         }
-        // Scope to limit the mutable borrow of write_buffers
-        let buffer = self.write_buffers.get_mut(&fh).unwrap();
-        buffer.insert(off, data.to_vec());
-
-        reply.written(data.len() as u32);
-
         
         if self.speed_testing {
             let duration = timer_start.elapsed();
@@ -656,7 +654,6 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 }
             }
 
-            self.write_buffers.remove(&fh); // removes the write buffer associated with this file handle
         } else {
             reply.ok(); // nothing to flush
         }

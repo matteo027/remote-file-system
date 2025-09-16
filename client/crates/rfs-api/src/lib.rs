@@ -308,6 +308,7 @@ impl RemoteBackend for HttpBackend {
     }
 
     fn write_chunk(&mut self, ino: u64, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
+        println!("Writing chunk to inode {} at offset {}", ino, offset);
         let endpoint = format!("api/files/{}?offset={}", ino, offset);
         let url= self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req=self.client.request(Method::PUT, url).header(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream")).body(data);

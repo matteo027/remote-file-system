@@ -30,7 +30,7 @@ export function setRoutes(app: Express) {
 
     // router.put('/api/files/stream/:ino', isLoggedIn, rwController.writeStream);
     // router.get('/api/files/stream/:ino', isLoggedIn, rwController.readStream);
-    // router.put('/api/files/:ino', isLoggedIn, express.raw({type:'application/octet-stream', limit: '1gb'}), rwController.write);
-    // router.get('/api/files/:ino', isLoggedIn, rwController.read);
+    router.put('/api/files/:ino', isLoggedIn, express.raw({type:'application/octet-stream', limit: '1gb'}), rwController.write);
+    router.get('/api/files/:ino', isLoggedIn, rwController.read);
 
 }
