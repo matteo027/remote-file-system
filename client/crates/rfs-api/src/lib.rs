@@ -308,7 +308,6 @@ impl RemoteBackend for HttpBackend {
     }
 
     fn write_chunk(&mut self, ino: u64, offset: u64, data: Vec<u8>) -> Result<u64, BackendError> {
-        println!("Writing chunk to inode {} at offset {}", ino, offset);
         let endpoint = format!("api/files/{}?offset={}", ino, offset);
         let url= self.base_url.join(&endpoint).map_err(|e| BackendError::Other(e.to_string()))?;
         let req=self.client.request(Method::PUT, url).header(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream")).body(data);
@@ -353,7 +352,7 @@ impl RemoteBackend for HttpBackend {
 
     fn write_stream(&mut self, ino: u64, offset: u64, data: Vec<u8>) -> Result<(), BackendError> {
         let endpoint = format!("api/files/stream/{}?offset={}", ino, offset);
-        println!("Writing stream to {}", endpoint);
+        
         // using Cursor to transform Vec<u8> into a reader
         let cursor = Cursor::new(data);
         let reader_stream = ReaderStream::new(cursor);
@@ -368,14 +367,9 @@ impl RemoteBackend for HttpBackend {
             .headers(headers)
             .body(body);
 
-            println!("Sending request to {}", endpoint);
         let resp = self.runtime.block_on(async { req.send().await }).map_err(|e| BackendError::Other(e.to_string()))?;
-        println!("Received response with status: {}", resp.status());
         return match resp.status() {
-            StatusCode::OK => {
-                println!("Stream write successful");
-                Ok(())
-            },
+            StatusCode::OK => Ok(()),
             _ => Err(self.decode_error(resp, &endpoint)),
         }
     }

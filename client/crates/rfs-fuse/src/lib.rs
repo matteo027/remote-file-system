@@ -144,10 +144,9 @@ impl<B: RemoteBackend> RemoteFS<B> {
 
     fn flush_file(&mut self, fh: u64, ino: u64) -> Result<(), BackendError> {
 
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
-
         let mut start_offset = 0 as u64;
         let mut last_offset = 0 as u64;
+        let mut prev_block_size = 0 as u64;
         // Collect the map's contents into a vector to avoid double mutable borrow
         let map_entries: Vec<(u64, Vec<u8>)> = {
             let map: &mut BTreeMap<u64, Vec<u8>> = self.write_buffers.get_mut(&fh).unwrap();
@@ -159,8 +158,9 @@ impl<B: RemoteBackend> RemoteFS<B> {
         let mut buffer = Vec::<u8>::new();
         for (off, data) in map_entries.iter() {
 
-            if last_offset + page_size == *off {
+            if buffer.is_empty() || last_offset + prev_block_size as u64 == *off {
                 last_offset = *off;
+                prev_block_size = data.len() as u64;
                 buffer.extend_from_slice(&data);
             } else {
                 // Flush the current buffer
@@ -173,7 +173,9 @@ impl<B: RemoteBackend> RemoteFS<B> {
         }
 
         // flushing last bytes
-        self.flush_buffer(&mut buffer, ino, start_offset)?;
+        if !buffer.is_empty() {
+            self.flush_buffer(&mut buffer, ino, start_offset)?;
+        }
 
         Ok(())
     }
@@ -541,9 +543,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         }
 
         let mut off= offset as u64;
-        println!("Offset before the checks: {}", off);
         if flags & libc::O_APPEND != 0 {
-            println!("Append mode write requested for ino {}", ino);
             match self.backend.get_attr(ino) {
                 Ok(entry) => off = entry.size,
                 Err(e) => {
@@ -552,7 +552,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
                 }
             }
         }
-        println!("Offset after the checks: {}", off);
+        
         if self.write_buffers.get(&fh).is_none() {
             reply.error(EBADF); // File handle not found
         } else {

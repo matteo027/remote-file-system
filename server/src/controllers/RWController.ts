@@ -19,14 +19,17 @@ export function normalizePath(input?: string | string[]): string {
 
 export class ReadWriteController{
     public writeStream = async (req: Request, res: Response) => {
-        const dbPath = normalizePath(req.params.path);
-        const fullFsPath = toFsPath(dbPath);
-
-        //const text: Buffer = Buffer.from(req.body.data);
-        const offset: number = Number(req.headers['x-chunk-offset'] ?? 0); // offset passed by the client, default 0      
+        const ino = parseIno(req.params.ino);
+        const offset = Number(req.query.offset) || 0;
         const user: User = req.user as User;
+
+        if (!ino)
+            return res.status(400).json({ error: "EINVAL", message: "Inode missing" });
         if (user === null) {
             return res.status(500).json({ error: 'Not possible to retreive user data' });
+        }
+        if (offset < 0) {
+            return res.status(400).json({ error: 'Bad request: invalid offset' });
         }
 
         const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
@@ -34,12 +37,14 @@ export class ReadWriteController{
         try {
 
             const file: File = await fileRepo.findOne({
-                where: { path:dbPath },
+                where: { ino },
                 relations: ['owner', 'group']
             }) as File;
             if (!has_permissions(file, 1, req.user as User))
-                return res.status(403).json({ error: 'You have not the permission to write on the file ' + dbPath });
-            
+                return res.status(403).json({ error: 'You have not the permission to write into the inode ' + ino });
+
+            const dbPath = file.path;
+            const fullFsPath = toFsPath(dbPath);
             const fd = fsSync.openSync(fullFsPath, 'r+'); // or 'w+' to truncate, 'a+' to append
             const writeStream = fsSync.createWriteStream('', { fd, start: offset, autoClose: true });
             let bytesWritten = 0;
@@ -142,19 +147,28 @@ export class ReadWriteController{
             } else if (err.code === 'EACCES') {
                 res.status(403).json({ error: 'Access denied' });
             } else {
-                res.status(500).json({ error: 'Not possible to write on file ' + dbPath, details: err });
+                res.status(500).json({ error: 'Not possible to write into inode ' + ino, details: err });
             }
         }
     }
 
     public readStream = async (req: Request, res: Response) => {
-        const dbPath = normalizePath(req.params.path);
-        const fullFsPath = toFsPath(dbPath);
+        const ino = parseIno(req.params.ino);
         const offset = Number(req.query.offset) || 0;
+        const user: User = req.user as User;
+
+        if (!ino)
+            return res.status(400).setHeader('Content-Type', 'application/octet-stream').end();
+        if (offset < 0) {
+            return res.status(400).setHeader('Content-Type', 'application/octet-stream').end();
+        }
+        if (user === null) {
+            return res.status(500).setHeader('Content-Type', 'application/octet-stream').end();
+        }
 
         try {
             const file: File = await fileRepo.findOne({
-                where: { path: dbPath },
+                where: { ino },
                 relations: ['owner', 'group']
             }) as File;
             if (file === null) {
@@ -169,6 +183,8 @@ export class ReadWriteController{
                     .setHeader('Content-Length', '0')
                     .end();
             }
+            const dbPath = file.path;
+            const fullFsPath = toFsPath(dbPath);
 
             const readStream = fsSync.createReadStream(fullFsPath, { start: offset });
 
