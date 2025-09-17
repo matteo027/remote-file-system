@@ -148,7 +148,7 @@ impl HttpBackend {
         cookie_jar.add_cookie_str(&cookie_str, &base_url);
         let client = reqwest::Client::builder()
             .cookie_provider(cookie_jar)
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(300)) // 5 mins
             .build()
             .expect("Unable to build the Client object");
 
