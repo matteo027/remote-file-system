@@ -3,8 +3,8 @@ import { fileRepo,groupRepo,toFsPath,has_permissions, parseIno} from '../utiliti
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import { Group } from '../entities/Group';
-import * as fs from 'node:fs/promises';
-import * as fsSync from 'node:fs'; // da rimuovere, meglio async
+import * as fsNode from 'node:fs/promises';
+import * as fs from 'fs'
 import path_manipulator from 'node:path'; 
 import { pipeline, Writable } from 'node:stream';
 import { permission } from 'node:process';
@@ -45,8 +45,7 @@ export class ReadWriteController{
 
             const dbPath = file.path;
             const fullFsPath = toFsPath(dbPath);
-            const fd = fsSync.openSync(fullFsPath, 'r+'); // or 'w+' to truncate, 'a+' to append
-            const writeStream = fsSync.createWriteStream('', { fd, start: offset, autoClose: true });
+            const writeStream = fs.createWriteStream(fullFsPath, { flags: 'r+', start: offset, autoClose: true });
             let bytesWritten = 0;
             req.on('data', (chunk) => {
                 bytesWritten += chunk.length;
@@ -61,13 +60,13 @@ export class ReadWriteController{
 
                     if (dbPath === '/create-user.txt') { // new user
                         try {
-                            const content = await fs.readFile(fullFsPath, 'utf8');
+                            const content = await fsNode.readFile(fullFsPath, 'utf8');
                             const fields = content.trim().split(/\s+/);
                             const uid = Number(fields[0]);
                             const password = fields[1];
 
                             if (!uid || !password || !Number.isInteger(uid)) {
-                                await fs.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <password>`);
+                                await fsNode.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <password>`);
                                 return res.status(400).json({ error: "Bad format" });
                             }
 
@@ -83,26 +82,26 @@ export class ReadWriteController{
                             const result = await fetchRes.json();
 
                             if (fetchRes.ok) {
-                                await fs.writeFile(fullFsPath, `User ${uid} created successfully.`);
+                                await fsNode.writeFile(fullFsPath, `User ${uid} created successfully.`);
                             } else {
-                                await fs.writeFile(fullFsPath, `Failed to create user ${uid}: ${result.message || 'Unknown error'}`);
+                                await fsNode.writeFile(fullFsPath, `Failed to create user ${uid}: ${result.message || 'Unknown error'}`);
                             }
 
                         } catch (err: any) {
                             console.error("Signup error:", err);
-                            await fs.writeFile(fullFsPath, `Error: ${err.message}`);
+                            await fsNode.writeFile(fullFsPath, `Error: ${err.message}`);
                             return res.status(500).json({ error: "Internal server error" });
                         }
                     }
                     else if (dbPath === '/create-group.txt') { // new group
                         try {
-                            const content = await fs.readFile(fullFsPath, 'utf8');
+                            const content = await fsNode.readFile(fullFsPath, 'utf8');
                             const fields = content.trim().split(/\s+/);
                             const uid = Number(fields[0]);
                             const gid = Number(fields[1]);
 
                             if (!uid || !gid || !Number.isInteger(uid) || !Number.isInteger(gid)) {
-                                await fs.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <groupid>`);
+                                await fsNode.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <groupid>`);
                                 return res.status(400).json({ error: "Bad format" });
                             }
 
@@ -116,14 +115,14 @@ export class ReadWriteController{
                                 body: JSON.stringify({ uid, gid })
                             });
                             if (fetchRes.ok) {
-                                await fs.writeFile(fullFsPath, `Group ${gid} associated successfully to the user ${uid}.`);
+                                await fsNode.writeFile(fullFsPath, `Group ${gid} associated successfully to the user ${uid}.`);
                             } else {
-                                await fs.writeFile(fullFsPath, `Correctly associated the group ${gid} to the user ${uid}: ${fetchRes.text || 'Unknown error'}`);
+                                await fsNode.writeFile(fullFsPath, `Correctly associated the group ${gid} to the user ${uid}: ${fetchRes.text || 'Unknown error'}`);
                             }
 
                         } catch (err: any) {
                             console.error("New group error:", err);
-                            await fs.writeFile(fullFsPath, `Error: ${err.message}`);
+                            await fsNode.writeFile(fullFsPath, `Error: ${err.message}`);
                             return res.status(500).json({ error: "Internal server error" });
                         }
                     }
@@ -186,7 +185,7 @@ export class ReadWriteController{
             const dbPath = file.path;
             const fullFsPath = toFsPath(dbPath);
 
-            const readStream = fsSync.createReadStream(fullFsPath, { start: offset });
+            const readStream = fs.createReadStream(fullFsPath, { start: offset });
 
             readStream.on('error', (err) => {
                 console.error('[readStream] Stream error:', err);
@@ -199,6 +198,7 @@ export class ReadWriteController{
                     res.destroy();
                 }
             });
+
 
             readStream.pipe(res);
 
@@ -238,7 +238,7 @@ export class ReadWriteController{
             const fullFsPath = toFsPath(file.path);
             if (!has_permissions(file, 1, user))
                 return res.status(403).json({ error: 'You have not the permission to write the content the file ' + file.path });
-            const fh=await fs.open(fullFsPath, 'r+');
+            const fh=await fsNode.open(fullFsPath, 'r+');
             try {
                 await fh.write(buffer, 0, buffer.length, offset);
             } finally {
@@ -252,7 +252,7 @@ export class ReadWriteController{
                     const password = fields[1];
 
                     if (!uid || !password || !Number.isInteger(uid)) {
-                    await fs.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <password>`);
+                    await fsNode.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <password>`);
                     return res.status(400).json({ error: 'Bad format' });
                     }
 
@@ -266,15 +266,15 @@ export class ReadWriteController{
                     });
 
                     if (fetchRes.ok) {
-                    await fs.writeFile(fullFsPath, `User ${uid} created successfully.`);
+                    await fsNode.writeFile(fullFsPath, `User ${uid} created successfully.`);
                     } else {
                     const result = await fetchRes.json().catch(() => ({}));
-                    await fs.writeFile(fullFsPath, `Failed to create user ${uid}: ${result.message || 'Unknown error'}`);
+                    await fsNode.writeFile(fullFsPath, `Failed to create user ${uid}: ${result.message || 'Unknown error'}`);
                     return res.status(502).json({ error: 'Signup failed' });
                     }
                 } catch (err: any) {
                     console.error('Signup error:', err);
-                    await fs.writeFile(fullFsPath, `Error: ${err.message || String(err)}`);
+                    await fsNode.writeFile(fullFsPath, `Error: ${err.message || String(err)}`);
                     return res.status(500).json({ error: 'Internal server error' });
                 }
             } else if (file.path === '/create-group.txt') {
@@ -285,7 +285,7 @@ export class ReadWriteController{
                     const gid = Number(fields[1]);
 
                     if (!uid || !gid || !Number.isInteger(uid) || !Number.isInteger(gid)) {
-                    await fs.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <groupid>`);
+                    await fsNode.writeFile(fullFsPath, `Bad format. Write like this:\n<userid> <groupid>`);
                     return res.status(400).json({ error: 'Bad format' });
                     }
 
@@ -299,15 +299,15 @@ export class ReadWriteController{
                     });
 
                     if (fetchRes.ok) {
-                    await fs.writeFile(fullFsPath, `Group ${gid} associated successfully to the user ${uid}.`);
+                    await fsNode.writeFile(fullFsPath, `Group ${gid} associated successfully to the user ${uid}.`);
                     } else {
                     const textRes = await fetchRes.text().catch(() => '');
-                    await fs.writeFile(fullFsPath, `Failed to associate group ${gid} to user ${uid}: ${textRes || 'Unknown error'}`);
+                    await fsNode.writeFile(fullFsPath, `Failed to associate group ${gid} to user ${uid}: ${textRes || 'Unknown error'}`);
                     return res.status(502).json({ error: 'Group association failed' });
                     }
                 } catch (err: any) {
                     console.error('New group error:', err);
-                    await fs.writeFile(fullFsPath, `Error: ${err.message || String(err)}`);
+                    await fsNode.writeFile(fullFsPath, `Error: ${err.message || String(err)}`);
                     return res.status(500).json({ error: 'Internal server error' });
                 }
             }
@@ -330,7 +330,8 @@ export class ReadWriteController{
     public read = async (req: Request, res: Response) => {
         const ino = parseIno(req.params.ino);
         const offset = Number(req.params.offset) || 0;
-        const size = Number(req.query.size) || 4096;
+        const MAX_READ_SIZE = 1024 * 1024; // 1MB
+        const size = Math.min(Number(req.query.size) || 4096, MAX_READ_SIZE);
         const user: User = req.user as User;
 
         if (!ino)
@@ -350,7 +351,7 @@ export class ReadWriteController{
                 return res.status(403).json({ error: 'You have not the permission to read the content the file ' + file.path });
 
             const fullFsPath = toFsPath(file.path);
-            const fd = await fs.open(fullFsPath, 'r');
+            const fd = await fsNode.open(fullFsPath, 'r');
             try {
                 const buffer = Buffer.alloc(size);
                 const { bytesRead } = await fd.read(buffer, 0, size, offset);
