@@ -26,31 +26,36 @@ export class AuthenticationController {
         if (exists) {
             return res.status(400).json({ message: "User already exists" });
         }
+        console.log("User does not exist, creating...");
 
         const salt = crypto.randomBytes(16).toString('hex');
         const hashedPassword = (await scryptAsync(password, salt, 32) as Buffer).toString('hex');
 
         const user = userRepo.create({ uid, password: hashedPassword, salt });
         await userRepo.save(user);
-
+        console.log("User saved in database");
         // directory for the new user
         await fs.mkdir(`./file-system/${uid}`, { recursive: true });
+        const ino = (await fs.lstat(`./file-system/${uid}`, { bigint: true })).ino;
+        console.log("User directory created in file system");
 
-        const now = Date.now();
         const userDir = fileRepo.create({
+            ino: ino.toString(),
             owner: user,
             type: 1,
             permissions: 0o755
         });
         await fileRepo.save(userDir);
+        console.log("User directory file entry saved in database");
         const userPath = pathRepo.create({
             file: userDir,
             path: `/${uid}`
         });
         await pathRepo.save(userPath);
+        console.log("User directory path saved in database");
 
         // clearing the file create-user
-        await fs.writeFile('./file-system/create-user.txt', '');
+        await fs.writeFile('./file-system/create-user.txt', 'User successfully created');
 
         return res.status(200).json({ message: "User created" });
     }
@@ -116,7 +121,7 @@ export class AuthenticationController {
         await userRepo.save(user);
 
         // clearing the file create-group
-        await fs.writeFile('./file-system/create-group.txt', '');
+        await fs.writeFile('./file-system/create-group.txt', 'Group successfully created');
 
         return res.status(200).end();
     }

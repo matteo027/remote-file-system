@@ -383,6 +383,7 @@ export class FileController{
 
 
             if(!has_permissions(dirLink,1,user)){
+                console.log("No permission to create in the link parent");
                 return res.status(403).json({ error: "EACCES", message: `No permission to create in ${dirLink.paths[0].path}` });
             }
             
