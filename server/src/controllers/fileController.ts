@@ -1,9 +1,10 @@
 import { Request, Response } from 'express';
-import { fileRepo,groupRepo,toFsPath,has_permissions,parseIno,toEntryJson,isBadName,childPathOf} from '../utilities';
+import { fileRepo,groupRepo,pathRepo,toFsPath,has_permissions,parseIno,toEntryJson,isBadName,childPathOf} from '../utilities';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import { Group } from '../entities/Group';
 import * as fs from 'node:fs/promises';
+import { Path } from '../entities/Path';
 
 export class FileController{
     public mkdir = async (req: Request, res: Response) => {
@@ -22,35 +23,43 @@ export class FileController{
         
         try{
             const parent = (await fileRepo.findOne({
-                where: { ino: parentIno },              
-                relations: ["owner", "group"],
+                where: { ino: parentIno },
+                relations: ["owner", "group", "paths"],
             })) as File | null;
 
             if (!parent) {
                 return res.status(404).json({ error: "ENOENT", message: `Parent inode ${parentIno} not found` });
             }
-
-            if(!has_permissions(parent,1,user)){
-                return res.status(403).json({ error: "EACCES", message: `No permission to create in ${parent.path}` });
+            if (parent.type !== 1) {
+                return res.status(400).json({ error: "ENOTDIR", message: "Parent is not a directory" });
             }
 
-            const childDbPath = childPathOf(parent.path, name);
+            if(!has_permissions(parent,1,user)){
+                return res.status(403).json({ error: "EACCES", message: `No permission to create in ${parentIno}` });
+            }
+
+            const childDbPath = childPathOf(parent.paths[0].path, name); // directories have only one path
             const childFsPath = toFsPath(childDbPath);
 
             await fs.mkdir(childFsPath);
             const stats=await fs.lstat(childFsPath,{bigint:true});
+            
             const directory = {
-                ino:stats.ino,
-                path:childDbPath,
+                ino:stats.ino.toString(),
                 owner:user,
                 group: userGroup,
                 type: 1,
                 permissions: 0o755,
             } as File;
-
             await fileRepo.save(directory);
 
-            return res.status(201).json(toEntryJson(directory, stats));
+            const childPathObject = {
+                file: directory,
+                path: childDbPath
+            } as Path;
+            await pathRepo.save(childPathObject);
+
+            return res.status(201).json(toEntryJson(directory, stats, childPathObject));
         }catch(err:any){
             if (err?.code === "EEXIST") {
                 return res.status(409).json({ error: "EEXIST", message: "Folder already exists" });
@@ -78,21 +87,24 @@ export class FileController{
         try {
             const parent= await fileRepo.findOne({
                 where:{ino:parentIno},
-                relations:["owner","group"],
+                relations:["owner", "group", "paths"],
             })as File | null;
             if (!parent){
                 return res.status(404).json({ error: "ENOENT", message: `Parent inode ${parentIno} not found` });
             }
+            if (parent.type !== 1) {
+                return res.status(400).json({ error: "ENOTDIR", message: "Parent is not a directory" });
+            }
             
             if(!has_permissions(parent,1,user)){
-                return res.status(403).json({ error: "EACCES", message: `No permission to remove in ${parent.path}` });
+                return res.status(403).json({ error: "EACCES", message: `No permission to remove in ${parentIno}` });
             }
-            const childDbPath = childPathOf(parent.path, name);
+            const childDbPath = childPathOf(parent.paths[0].path, name);
             const childFsPath = toFsPath(childDbPath);
 
             const child= await fileRepo.findOne({
-                where: { path: childDbPath },
-                relations: ["owner", "group"],
+                where: { paths: { path: childDbPath } },
+                relations: ["owner", "group", "paths"],
             }) as File | null;
 
             if(!child){
@@ -115,7 +127,14 @@ export class FileController{
                 throw e;
             }
 
-            await fileRepo.remove(child);
+            await pathRepo.remove(child.paths.find(p=>p.path===childDbPath) as Path);
+            const remainingPaths = await pathRepo.find({ where: { file: child } });
+            
+            if (remainingPaths.length < 1) {
+                await fileRepo.remove(child);
+            }
+            else // should not happen, but just in case
+                return res.status(500).json({ error: "EIO", message: "Directory has multiple paths, manual cleanup required" });
             return res.status(200).end();
         } catch (err: any) {
             return res.status(500).json({
@@ -144,7 +163,7 @@ export class FileController{
         try{
             const parent = await fileRepo.findOne({
                 where:{ino:parentIno},
-                relations:["owner","group"]
+                relations:["owner", "group", "paths"],
             }) as File;
 
             if (!parent) 
@@ -154,27 +173,30 @@ export class FileController{
                 return res.status(400).json({ error: "ENOTDIR", message: "Parent is not a directory" });
 
             if(!has_permissions(parent,1,user)){
-                return res.status(403).json({ error: "EACCES", message: `No permission to create in ${parent.path}` });
+                return res.status(403).json({ error: "EACCES", message: `No permission to create in ${parentIno}` });
             }
 
-            const childDbPath = childPathOf(parent.path, name);
+            const childDbPath = childPathOf(parent.paths[0].path, name);
             const childFsPath = toFsPath(childDbPath);
 
             await fs.writeFile(childFsPath, "", { flag: "wx" });
             const stats=await fs.lstat(childFsPath,{bigint:true});
             const file={
-                ino:stats.ino,
-                path:childDbPath,
+                ino:stats.ino.toString(),
                 owner:user,
                 group: userGroup ?? null,
                 type: 0,
                 permissions: 0o644,
             } as File;
+            const pathObj={
+                file:file,
+                path:childDbPath
+            } as Path;
             await fileRepo.save(file);
+            await pathRepo.save(pathObj);
 
-            return res.status(201).json(toEntryJson(file, stats));
+            return res.status(201).json(toEntryJson(file, stats, pathObj));
         }catch(err:any){
-            console.log(err);
             if (err?.code === "EEXIST") {
                 return res.status(409).json({ error: "EEXIST", message: "File already exists" });
             }
@@ -206,19 +228,22 @@ export class FileController{
         try{
             const parent= await fileRepo.findOne({
                 where:{ino:parentIno},
-                relations:["owner", "group"],
+                relations:["owner", "group", "paths"],
             }) as File;
             if (!parent){
                 if (!parent) return res.status(404).json({ error: "ENOENT", message: `Parent inode ${parentIno} not found` });
             }
-            if(!has_permissions(parent,1,user)){
-                return res.status(403).json({ error: "EACCES", message: `No permission to remove in ${parent.path}` });
+            if (parent.type !== 1) {
+                return res.status(400).json({ error: "ENOTDIR", message: "Parent is not a directory" });
             }
-            const childDbPath = parent.path === "/" ? `/${name}` : `${parent.path}/${name}`;
+            if(!has_permissions(parent,1,user)){
+                return res.status(403).json({ error: "EACCES", message: `No permission to remove in ${parentIno}` });
+            }
+            const childDbPath = parent.paths[0].path === "/" ? `/${name}` : `${parent.paths[0].path}/${name}`;
             const childFsPath = toFsPath(childDbPath);
             const child=await fileRepo.findOne({
-                where: {path:childDbPath},
-                relations:["owner","group"],
+                where: {paths: {path: childDbPath}},
+                relations:["owner","group","paths"],
             })as File | null;
             if (!child){
                 return res.status(404).json({ error: "ENOENT", message: "File metadata not found in database" });
@@ -233,8 +258,12 @@ export class FileController{
                     return res.status(400).json({ error: "EISDIR", message: "Target is a directory" });
                 throw err;
             }
-
-            await fileRepo.remove(child);
+            
+            await pathRepo.remove(child.paths.find(p=>p.path===childDbPath) as Path);
+            const remainingPaths = await pathRepo.find({ where: { file: child } });
+            
+            if (remainingPaths.length < 1)
+                await fileRepo.remove(child);
             return res.status(200).end();
         }catch(err:any){
             return res.status(500).json({
@@ -263,8 +292,8 @@ export class FileController{
 
         try{
             const[oldParent,newParent]=await Promise.all([
-                fileRepo.findOne({ where: { ino: oldParentIno }, relations: ["owner","group"] }),
-                fileRepo.findOne({ where: { ino: newParentInode }, relations: ["owner","group"] }),
+                fileRepo.findOne({ where: { ino: oldParentIno }, relations: ["owner", "group", "paths"] }),
+                fileRepo.findOne({ where: { ino: newParentInode }, relations: ["owner", "group", "paths"] }),
             ]);
 
             if (!oldParent) 
@@ -279,12 +308,12 @@ export class FileController{
                 return res.status(403).json({ error: "EACCES", message: `Insufficient permissions` });
             }
 
-            const oldPath = childPathOf(oldParent.path, oldName);
-            const newPath = childPathOf(newParent.path, newName);
+            const oldPath = childPathOf(oldParent.paths[0].path, oldName);
+            const newPath = childPathOf(newParent.paths[0].path, newName);
             const fullOld = toFsPath(oldPath);
             const fullNew = toFsPath(newPath);
 
-            const entry = await fileRepo.findOne({ where: { path: oldPath }, relations: ["owner","group"] }) as File | null;
+            const entry = await fileRepo.findOne({ where: { paths: {path: oldPath }}, relations: ["owner", "group", "paths"] }) as File | null;
             if (!entry) 
                 return res.status(404).json({ error: "ENOENT", message: "Source entry not found" });
 
@@ -297,12 +326,85 @@ export class FileController{
                     return res.status(409).json({ error: "EEXIST", message: "Target exists" });
                 throw err;
             }
-            await fileRepo.update({ino:entry.ino}, { path: newPath });
-            console.log("saved");
-            const stats=await fs.lstat(fullNew,{bigint:true});
-            return res.status(200).json(toEntryJson(entry, stats));
+            const pathObj = entry.paths.find(p => p.path === oldPath);
+            if (!pathObj) 
+                return res.status(500).json({ error: "EIO", message: "Path data not found, manual cleanup required" });
+            pathObj.path = newPath;
+            await pathRepo.save(pathObj);
+            const stats = await fs.lstat(fullNew,{bigint:true});
+            return res.status(200).json(toEntryJson(entry, stats, pathObj));
         }catch(err:any){
             return res.status(500).json({ error: "EIO", message: "Not possible to rename", details: String(err?.message ?? err) });
         }
+    }
+
+    public hardlink = async (req: Request, res: Response) => {
+        const targetIno = parseIno(req.params.targetIno);
+        const dirLinkIno = parseIno(req.body.linkParentIno);
+        const linkName = (req.body.linkName) as string | "";
+
+        if(!dirLinkIno){
+            console.log("Missing link parent inode");
+            return res.status(400).json({ error: "EINVAL", message: "Parent link missing" });
+        }
+        if(!targetIno)
+            return res.status(400).json({ error: "EINVAL", message: "Target inode missing" });
+        if (isBadName(linkName))
+            return res.status(400).json({ error: "EINVAL", message: "Invalid link name" });
+
+        const user = req.user as User | undefined;
+        if (!user) {
+            return res.status(500).json({ error: 'Not possible to retreive user data' });
+        }
+
+        try{
+            
+            const target = await fileRepo.findOne({
+                where:{ ino: targetIno },
+                relations:["owner", "group", "paths"]
+            }) as File | null;
+            const dirLink = await fileRepo.findOne({
+                where:{ ino: dirLinkIno },
+                relations:["owner", "group", "paths"]
+            }) as File | null;
+
+            if (!target)
+                return res.status(404).json({ error: "ENOENT", message: `Target file ${targetIno} not found` });
+            if (target.type === 1){
+                console.log("Target is a directory");
+                return res.status(400).json({ error: "EISDIR", message: "Cannot create a hard link of a directory" });
+            }
+            if (!dirLink)
+                return res.status(404).json({ error: "ENOENT", message: `Link parent inode ${dirLinkIno} not found` });
+            if (dirLink.type !== 1) {
+                console.log("Link parent is not a directory");
+                return res.status(400).json({ error: "ENOTDIR", message: "Link parent is not a directory" });
+            }
+
+
+            if(!has_permissions(dirLink,1,user)){
+                return res.status(403).json({ error: "EACCES", message: `No permission to create in ${dirLink.paths[0].path}` });
+            }
+            
+            const targetFsPath = toFsPath(target.paths[0].path); // every path is valid, so we can take the first one
+            const linkDbPath = childPathOf(dirLink.paths[0].path, linkName);
+            const linkFsPath = toFsPath(linkDbPath);
+
+            await fs.link(targetFsPath, linkFsPath);
+            const stats = await fs.lstat(linkFsPath,{bigint:true});
+
+            const linkPathObj = {
+                file: target,
+                path: linkDbPath
+            } as Path;
+            await pathRepo.save(linkPathObj);
+
+            return res.status(200).json(toEntryJson(target, stats, linkPathObj));
+
+        }
+        catch(err:any){
+            return res.status(500).json({ error: "EIO", message: "Not possible to create the hard link", details: String(err?.message ?? err) });
+        }
+
     }
 }

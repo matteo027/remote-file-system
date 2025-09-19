@@ -33,4 +33,6 @@ export function setRoutes(app: Express) {
     router.put('/api/files/:ino', isLoggedIn, express.raw({type:'application/octet-stream', limit: '1gb'}), rwController.write);
     router.get('/api/files/:ino', isLoggedIn, rwController.read);
 
+    router.post('/api/links/:targetIno', isLoggedIn, fileController.hardlink);
+
 }

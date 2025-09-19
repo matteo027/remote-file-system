@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
-import { fileRepo,userRepo,toFsPath,has_permissions,parseIno,toEntryJson,isBadName,childPathOf} from '../utilities';
+import { fileRepo,userRepo,toFsPath,has_permissions,parseIno,toEntryJson,isBadName,childPathOf, pathRepo} from '../utilities';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import * as fs from 'node:fs/promises';
+import { Path } from '../entities/Path';
+import path from 'node:path';
 
 export class AttributeController{
     public readdir = async (req: Request, res: Response) => {
@@ -11,29 +13,27 @@ export class AttributeController{
             return res.status(400).json({message:"Missing ino"});
 
         try{
-            const dir=await fileRepo.findOne({where: {ino:inoRec}, relations: ['owner', 'group'] }) as File | null;
+            const dir=await fileRepo.findOne({where: {ino:inoRec}, relations: ['owner', 'group', 'paths'] }) as File | null;
             if (!dir) 
                 return res.status(404).json({error: "ENOENT", message: `Directory with ino=${inoRec} not found` });
             if (dir.type !==1 )
-                return res.status(400).json({error: "ENOTDIR", message:`${dir.path} is not a directory`});
+                return res.status(400).json({error: "ENOTDIR", message:`${inoRec} is not a directory`});
 
             if (!has_permissions(dir, 0, req.user as User)) {
-                return res.status(403).json({ error: "EACCES", message: `You have not the permission to list ${dir.path}` });
+                return res.status(403).json({ error: "EACCES", message: `You have not the permission to list ${inoRec}` });
             }
-
-            const fullFsPath=toFsPath(dir.path);
+            const fullFsPath=toFsPath(dir.paths[0].path);
             const names=await fs.readdir(fullFsPath);
 
             const rows= await Promise.all(
                 names.map(async (name) => {
-                    const childDbPath = childPathOf(dir.path, name);
-                    const childFsPath = toFsPath(childDbPath);
-                    const stats = await fs.lstat(childFsPath,{bigint:true});
+                    const childDbPath = childPathOf(dir.paths[0].path, name);
+                    const pathObj = await pathRepo.findOne({where:{path:childDbPath}, relations:["file", "file.owner", "file.group"]}) as Path | null;
                     
-                    const file = await fileRepo.findOne({
-                        where: { ino: stats.ino },
-                        relations: ["owner", "group"],
-                    }) as File | null;
+                    if (!pathObj) return undefined;
+
+                    const file = pathObj?.file;
+                    const stats = await fs.lstat(toFsPath(childDbPath), { bigint: true });
 
                     if (!file) {
                         // mismatch FS↔DB
@@ -41,12 +41,12 @@ export class AttributeController{
                     }
 
                     if (!has_permissions(file, 0, req.user as User)) return undefined;
-
-                    return toEntryJson(file, stats);
+                    
+                    return toEntryJson(file, stats, pathObj);
                 })
             );
             const content=rows.filter(Boolean);
-            return res.json(content);
+            return res.status(200).json(content);
         }catch (err:any){
             if (err?.code === "ENOENT") {
                 return res.status(404).json({ error: "ENOENT", message: "Directory not found on filesystem" });
@@ -64,24 +64,22 @@ export class AttributeController{
             perm: rawPerm,
             uid: rawUid,
             gid: rawGid,
-            size: rawSize,
-            // flags: rawFlags
+            size: rawSize
         } = req.body ?? {};
-
-        
 
         try{
             const file = await fileRepo.findOne({
                 where:{ino:inoRec},
-                relations:["owner","group"],
+                relations:["owner", "group", "paths"],
             }) as File | null;
+            
             if (!file)
                 return res.status(404).json({ error: "ENOENT", message: "File not found" });
 
             if (!has_permissions(file,1, req.user as User)) 
-                return res.status(403).json({ error: "EACCES", message: `No permission on ${file.path}` });
+                return res.status(403).json({ error: "EACCES", message: `No permission on ${inoRec}` });
 
-            const fullFsPath=toFsPath(file.path);
+            const fullFsPath=toFsPath(file.paths[0].path); // every path is valid, so we can take the first one
 
             if(rawUid!=null || rawGid != null){
                 const user=await userRepo.findOne({where:{uid:rawUid}});
@@ -95,7 +93,7 @@ export class AttributeController{
                 }
                 await fileRepo.update({ino:file.ino}, { owner: file.owner, group: file.group });
             }
-
+            
             let newPerm: number|undefined;
             if(rawPerm!=null){
                 const n = typeof rawPerm === "number" ? rawPerm : parseInt(String(rawPerm), 10);
@@ -125,15 +123,15 @@ export class AttributeController{
                 }
                 await fs.truncate(fullFsPath, newSize);
             }
-
-            const stats=await fs.lstat(fullFsPath,{bigint:true});
-            return res.status(200).json(toEntryJson(file, stats));
+            
+            const stats=await fs.lstat(fullFsPath);
+            
+            return res.status(200).json(toEntryJson(file, stats, file.paths[0]));
         } catch (err:any){
             if (err?.code === "ENOENT") 
                 return res.status(404).json({ error: "ENOENT", message: "Filesystem path not found" });
             if (err?.code === "EACCES")
                 return res.status(403).json({ error: "EACCES", message: "Access denied" });
-            console.error(err);
             return res.status(500).json({ error: "EIO", message: "Unable to update attributes", details: String(err?.message ?? err) });
         }
     }
@@ -149,16 +147,16 @@ export class AttributeController{
             return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
 
         try{
-            const parentDir=await fileRepo.findOne({where:{ino:parentIno}, relations:['owner','group']}) as File;
+            const parentDir=await fileRepo.findOne({where:{ino:parentIno}, relations:['owner', 'group', 'paths']}) as File;
             if(!parentDir)
                 return res.status(404).json({ error: "ENOENT", message: "Parent directory not found" });
             if(parentDir.type !==1)
                 return res.status(400).json({ error: "ENOTDIR", message: "Parent is not a directory" });
 
             if(!has_permissions(parentDir,0, req.user as User))
-                return res.status(403).json({ error: "EACCES", message: `No permission to read ${parentDir.path}` });
+                return res.status(403).json({ error: "EACCES", message: `No permission to read ${parentDir.paths[0].path}` });
 
-            const childDbPath = childPathOf(parentDir.path, name);
+            const childDbPath = childPathOf(parentDir.paths[0].path, name);
             const childFsPath = toFsPath(childDbPath);
 
             let stats;
@@ -166,22 +164,27 @@ export class AttributeController{
                 stats = await fs.lstat(childFsPath, { bigint: true });
             } catch (e:any){
                 if(e?.code === "ENOENT"){
-                    return res.status(404).json({ error: "ENOENT", message: `File ${name} not found in ${parentDir.path}` });
+                    return res.status(404).json({ error: "ENOENT", message: `File ${name} not found in ${parentDir.paths[0].path}` });
                 }
                 throw e;
             }
 
             const childFile = await fileRepo.findOne({
-                where: { ino: stats.ino },
-                relations: ["owner", "group"],
+                where: { ino: stats.ino.toString() },
+                relations: ["owner", "group", "paths"],
             }) as File;
+            const childPathObj = await pathRepo.findOne({ where: { path: childDbPath }, relations: ["file"] }) as Path | null;
 
             if (!childFile) {
                 // mismatch FS↔DB
                 return res.status(500).json({ error: "EIO", message: `Mismatch FS/DB for ${childDbPath} (ino=${stats.ino})` });
             }
+            if (!childPathObj) {
+                // mismatch FS↔DB
+                return res.status(500).json({ error: "EIO", message: `Mismatch FS/DB for ${childDbPath}'s path (ino=${stats.ino})` });
+            }
 
-            return res.status(200).json(toEntryJson(childFile, stats));
+            return res.status(200).json(toEntryJson(childFile, stats, childPathObj));
         }catch (err:any){
             return res.status(500).json({
                 error: "EIO",
@@ -192,6 +195,7 @@ export class AttributeController{
     }
 
     public getattr = async (req: Request, res: Response) => {
+        
         const inoRec=parseIno(req.params.ino);
         const isModifiedHeader = req.header('if-modified-since');
         if(!inoRec)
@@ -200,16 +204,16 @@ export class AttributeController{
         try{
             const file = await fileRepo.findOne({
                 where:{ino:inoRec},
-                relations:["owner","group"],
+                relations:["owner", "group", "paths"],
             }) as File | null;
 
             if (!file)
                 return res.status(404).json({ error: "ENOENT", message: "File not found" });
             
             if(!has_permissions(file,0, req.user as User))
-                return res.status(403).json({ error: "EACCES", message: `You have not the permission to read ${file.path}` });
+                return res.status(403).json({ error: "EACCES", message: `You have not the permission to read ${inoRec}` });
 
-            const fullFsPath=toFsPath(file.path);
+            const fullFsPath=toFsPath(file.paths[0].path); // every path is valid, so we can take the first one
             const stats=await fs.lstat(fullFsPath,{bigint:true});
 
             const lastModifiedSecond = Math.floor(stats.mtime.getTime() / 1000);
@@ -226,13 +230,12 @@ export class AttributeController{
             const lastModifiedHttp=(new Date(lastModifiedSecond * 1000)).toUTCString();
             res.setHeader('Last-Modified', lastModifiedHttp);
 
-            return res.status(200).json(toEntryJson(file, stats));
+            return res.status(200).json(toEntryJson(file, stats, file.paths[0]));
         }catch (err:any){
             if (err.code === 'ENOENT') 
                 return res.status(404).json({ error: 'File not found' });
             if (err.code === 'EACCES') 
                 return res.status(403).json({ error: 'Access denied' });
-            console.error(err);
             return res.status(500).json({ error: 'Not possible to perform the operation', details: err });
         }
     }

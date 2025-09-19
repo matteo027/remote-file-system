@@ -32,18 +32,19 @@ export class ReadWriteController{
             return res.status(400).json({ error: 'Bad request: invalid offset' });
         }
 
-        const user_group: Group = await groupRepo.findOne({ where: { users: user } }) as Group;
-
         try {
 
             const file: File = await fileRepo.findOne({
                 where: { ino },
-                relations: ['owner', 'group']
+                relations: ['owner', 'group', 'paths']
             }) as File;
             if (!has_permissions(file, 1, req.user as User))
                 return res.status(403).json({ error: 'You have not the permission to write into the inode ' + ino });
 
-            const dbPath = file.path;
+            const dbPath = file.paths[0].path; // every path is valid, so we can take the first one
+            if (!dbPath) {
+                return res.status(500).json({ error: 'File path not found for inode ' + ino });
+            }
             const fullFsPath = toFsPath(dbPath);
             const writeStream = fs.createWriteStream(fullFsPath, { flags: 'r+', start: offset, autoClose: true });
             let bytesWritten = 0;
@@ -168,7 +169,7 @@ export class ReadWriteController{
         try {
             const file: File = await fileRepo.findOne({
                 where: { ino },
-                relations: ['owner', 'group']
+                relations: ['owner', 'group', 'paths']
             }) as File;
             if (file === null) {
                 return res.status(404)
@@ -182,7 +183,13 @@ export class ReadWriteController{
                     .setHeader('Content-Length', '0')
                     .end();
             }
-            const dbPath = file.path;
+            const dbPath = file.paths[0].path; // every path is valid, so we can take the first one
+            if (!dbPath) {
+                return res.status(500)
+                    .setHeader('Content-Type', 'application/octet-stream')
+                    .setHeader('Content-Length', '0')
+                    .end();
+            }
             const fullFsPath = toFsPath(dbPath);
 
             const readStream = fs.createReadStream(fullFsPath, { start: offset });
@@ -230,20 +237,27 @@ export class ReadWriteController{
         try {
             const file = await fileRepo.findOne({
                 where:{ino},
-                relations:["owner","group"]
+                relations:["owner", "group", "paths"]
             }) as File;
             if(!file)
                 return res.status(404).json({ error: 'File not found' });
-            const fullFsPath = toFsPath(file.path);
+            const fullFsPath = toFsPath(file.paths[0].path); // every path is valid, so we can take the first one
+            if (!fullFsPath) {
+                return res.status(500).json({ error: 'File path not found for inode ' + ino });
+            }
             if (!has_permissions(file, 1, user))
-                return res.status(403).json({ error: 'You have not the permission to write the content the file ' + file.path });
+                return res.status(403).json({ error: 'You have not the permission to write the content the file ' + ino });
             const fh=await fsNode.open(fullFsPath, 'r+');
             try {
                 await fh.write(buffer, 0, buffer.length, offset);
             } finally {
                 await fh.close();
             }
-            if (file.path === '/create-user.txt') {
+            const dbPath = file.paths[0].path; // every path is valid, so we can take the first one
+            if (!dbPath) {
+                return res.status(500).json({ error: 'File path not found for inode ' + ino });
+            }
+            if (dbPath === '/create-user.txt') {
                 try {
                     const text = buffer.toString('utf8');
                     const fields = text.trim().split(/\s+/);
@@ -276,7 +290,7 @@ export class ReadWriteController{
                     await fsNode.writeFile(fullFsPath, `Error: ${err.message || String(err)}`);
                     return res.status(500).json({ error: 'Internal server error' });
                 }
-            } else if (file.path === '/create-group.txt') {
+            } else if (dbPath === '/create-group.txt') {
                 try {
                     const text = buffer.toString('utf8');
                     const fields = text.trim().split(/\s+/);
@@ -342,14 +356,17 @@ export class ReadWriteController{
         try {
             const file: File = await fileRepo.findOne({
                 where: { ino },
-                relations: ['owner', 'group']
+                relations: ['owner', 'group', 'paths']
             }) as File;
             if (file === null)
                 return res.status(404).json({ error: 'File not found' });
             if (!has_permissions(file, 0, user))
-                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + file.path });
+                return res.status(403).json({ error: 'You have not the permission to read the content the file ' + ino });
 
-            const fullFsPath = toFsPath(file.path);
+            const fullFsPath = toFsPath(file.paths[0].path); // every path is valid, so we can take the first one
+            if (!fullFsPath) {
+                return res.status(500).json({ error: 'File path not found for inode ' + ino });
+            }
             const fd = await fsNode.open(fullFsPath, 'r');
             try {
                 const buffer = Buffer.alloc(size);

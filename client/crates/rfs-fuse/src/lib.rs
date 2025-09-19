@@ -669,8 +669,28 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
     }
 
     // Segnalo come non implementati i metodi relativi a link simbolici e hard link
-    fn link(&mut self,_req: &Request<'_>,_ino: u64,_new_parent: u64,_new_name: &OsStr,reply: ReplyEntry) {
-        reply.error(ENOSYS);
+    fn link(&mut self, req: &Request<'_>, ino: u64, new_parent: u64, new_name: &OsStr,reply: ReplyEntry) {
+        let timer_start = Instant::now();
+
+        let entry = match self.backend.link(ino, new_parent, &new_name.to_string_lossy()) {
+            Ok(entry) => entry,
+            Err(e) => {
+                reply.error(map_error(&e));
+                return;
+            }
+        };
+
+        let attr = entry_to_attr(&entry, req);
+
+        reply.entry(&TTL_FILE, &attr, 0);
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] setattr of ino {} duration: {:?}", ino, duration).ok();
+            }
+        }
     }
 
     fn symlink(&mut self,_req: &Request<'_>,_parent: u64,_name: &OsStr,_link: &Path,reply: ReplyEntry) {

@@ -1,19 +1,15 @@
-import { Entity, Column, PrimaryColumn, ManyToOne, JoinColumn } from "typeorm";
+import { Entity, Column, PrimaryColumn, ManyToOne, JoinColumn, OneToMany } from "typeorm";
 import { User } from "./User";
 import { Group } from "./Group";
-
-const BigIntTransformer = {
-  to:   (v: bigint | null) => v == null ? null : v.toString(), // -> DB
-  from: (v: string | null) => v == null ? null : BigInt(v),    // <- DB
-};
+import { Path } from "./Path";
 
 @Entity()
 export class File {
-  @PrimaryColumn({type:"bigint", transformer: BigIntTransformer})
-  ino: bigint;
+  @PrimaryColumn()
+  ino: string;
 
-  @Column({nullable:false, unique:true})
-  path:string;
+  @OneToMany(() => Path, (path) => path.file)
+  paths: Path[];
 
   @ManyToOne(() => User, (user) => user.files)
   @JoinColumn({ name: "owner", referencedColumnName: "uid" })
@@ -25,8 +21,8 @@ export class File {
   @Column({nullable:false})
   permissions: number;
 
-  @ManyToOne(() => Group, (group) => group.gid, { nullable: true })
-  @JoinColumn({ name: "group" })
+  @ManyToOne(() => Group, (group) => group.files, { nullable: true })
+  @JoinColumn({ name: "group", referencedColumnName: "gid" })
   group: Group;
 
 }

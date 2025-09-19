@@ -80,7 +80,19 @@ Content-Type: application/json
   "perm": 493
 }
 
+###
+POST http://localhost:3000/api/directories/1/files/pippo.txt
 
 ###
-GET http://localhost:3000/api/files/file2.txt
+// Making an hard link
+POST http://localhost:3000/api/links/1575933
+Content-Type: application/json
 
+{
+  "linkParentIno": "1581812",
+  "linkName": "pippo_link.txt"
+}
+
+###
+// Delete the link
+DELETE   http://localhost:3000/api/directories/1581812/files/pippo_link.txt

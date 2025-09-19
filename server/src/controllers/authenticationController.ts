@@ -6,6 +6,7 @@ import { AppDataSource } from '../data-source';
 import { promises as fs } from 'node:fs';
 import { File } from '../entities/File';
 import { Group } from '../entities/Group';
+import { pathRepo } from '../utilities';
 
 const scryptAsync = promisify(crypto.scrypt);
 
@@ -37,12 +38,16 @@ export class AuthenticationController {
 
         const now = Date.now();
         const userDir = fileRepo.create({
-            path: `/${uid}`,
             owner: user,
             type: 1,
             permissions: 0o755
         });
         await fileRepo.save(userDir);
+        const userPath = pathRepo.create({
+            file: userDir,
+            path: `/${uid}`
+        });
+        await pathRepo.save(userPath);
 
         // clearing the file create-user
         await fs.writeFile('./file-system/create-user.txt', '');

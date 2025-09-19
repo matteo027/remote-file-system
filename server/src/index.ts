@@ -10,6 +10,8 @@ import cors from 'cors';
 import { AuthenticationController } from './controllers/authenticationController';
 import { File } from './entities/File';
 import { promises as fs } from 'fs';
+import { pathRepo } from './utilities';
+import { Path } from './entities/Path';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -89,48 +91,69 @@ async function db() {
       });
       await userRepo.save(admin);
       
+      
       const root_dir = fileRepo.create({
-        ino: BigInt(1),
-        path: '/',
+        ino: '1',
         owner: admin,
         type: 1,
         permissions: 0o755,
       } as File);
+      const root_path = pathRepo.create({
+        path: '/',
+        file: root_dir
+      } as Path);
 
       // creating the 5000 (admin) folder and the create-user file
       await fs.mkdir('./file-system/5000', { recursive: true });
       let ino = (await fs.lstat('./file-system/5000',{bigint:true})).ino;
       const admin_dir = fileRepo.create({
-        ino:ino,
-        path: '/5000',
+        ino:ino.toString(),
         owner: admin,
         type: 1,
         permissions: 0o755,
       } as File);
+      const admin_path = pathRepo.create({
+        path: '/5000',
+        file: admin_dir
+      } as Path);
 
       await fs.writeFile('./file-system/create-user.txt', '');
       ino = (await fs.lstat('./file-system/create-user.txt',{bigint:true})).ino;
       const new_user_file = fileRepo.create({
-        ino:ino,
-        path: '/create-user.txt',
+        ino:ino.toString(),
         owner: admin,
         type: 0,
         permissions: 0o600,
       });
+      const new_user_path = pathRepo.create({
+        path: '/create-user.txt',
+        file: new_user_file
+      } as Path);
 
       await fs.writeFile('./file-system/create-group.txt', '');
       ino = (await fs.lstat('./file-system/create-group.txt',{bigint:true})).ino;
       const new_group_file = fileRepo.create({
-        ino:ino,
-        path: '/create-group.txt',
+        ino:ino.toString(),
         owner: admin,
         type: 0,
         permissions: 0o600,
       });
-      fileRepo.save(admin_dir);
-      fileRepo.save(root_dir);
-      fileRepo.save(new_user_file);
-      fileRepo.save(new_group_file);
+      const new_group_path = pathRepo.create({
+        path: '/create-group.txt',
+        file: new_group_file
+      } as Path);
+
+
+      await fileRepo.save(admin_dir);
+      await fileRepo.save(root_dir);
+      await fileRepo.save(new_user_file);
+      await fileRepo.save(new_group_file);
+
+      await pathRepo.save(admin_path);
+      await pathRepo.save(root_path);
+      await pathRepo.save(new_user_path);
+      await pathRepo.save(new_group_path);
+      
     }
 
   } catch (error) {

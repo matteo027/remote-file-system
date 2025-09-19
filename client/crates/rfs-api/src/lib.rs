@@ -373,4 +373,15 @@ impl RemoteBackend for HttpBackend {
             _ => Err(self.decode_error(resp, &endpoint)),
         }
     }
+    
+    fn link(&mut self, target_ino: u64, link_parent_ino: u64, link_name: &str) -> Result<FileEntry, BackendError> {
+        let endpoint = format!("api/links/{}", target_ino);
+        let body = serde_json::json!({
+            "linkParentIno": link_parent_ino,
+            "linkName": link_name
+        });
+        
+        let f: FileServerResponse = self.request_response::<FileServerResponse, Value>(Method::POST, &endpoint, Some(&body))?;
+        Ok(response_to_entry(f))
+    }
 }
