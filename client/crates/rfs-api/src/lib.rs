@@ -50,6 +50,11 @@ struct FileServerResponse {
     btime: SystemTime,
 }
 
+#[derive(Deserialize,Debug)]
+struct ReadLinkResponse {
+    target: String,
+}
+
 pub struct HttpBackend {
     runtime: Arc<Runtime>, // from tokio, used to manage async calls
     base_url: Url,
@@ -383,5 +388,25 @@ impl RemoteBackend for HttpBackend {
         
         let f: FileServerResponse = self.request_response::<FileServerResponse, Value>(Method::POST, &endpoint, Some(&body))?;
         Ok(response_to_entry(f))
+    }
+    
+    fn symlink(&mut self, target_path: &str, link_parent_ino: u64, link_name: &str) -> Result<FileEntry, BackendError> {
+        let endpoint = format!("api/symlinks");
+        let body = serde_json::json!({
+            "targetPath": target_path,
+            "linkParentIno": link_parent_ino,
+            "linkName": link_name
+        });
+        
+        let f: FileServerResponse = self.request_response::<FileServerResponse, Value>(Method::POST, &endpoint, Some(&body))?;
+        Ok(response_to_entry(f))
+    }
+    
+    fn readlink(&mut self, ino: u64) -> Result<String, BackendError> {
+        let endpoint = format!("api/symlinks/{}", ino);
+
+        let rlr = self.request_response::<ReadLinkResponse, ()>(Method::GET, &endpoint, None)?;
+        println!("target: {}", rlr.target);
+        Ok(rlr.target)
     }
 }

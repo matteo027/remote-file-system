@@ -688,16 +688,54 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             let duration = timer_start.elapsed();
             if let Some(file) = self.speed_file.as_mut() {
                 use std::io::Write;
-                writeln!(file, "[speed] setattr of ino {} duration: {:?}", ino, duration).ok();
+                writeln!(file, "[speed] link of ino {} duration: {:?}", ino, duration).ok();
             }
         }
     }
 
-    fn symlink(&mut self,_req: &Request<'_>,_parent: u64,_name: &OsStr,_link: &Path,reply: ReplyEntry) {
-        reply.error(ENOSYS);
+    fn symlink(&mut self, req: &Request<'_>, parent: u64, name: &OsStr, link: &Path, reply: ReplyEntry) {
+        let timer_start = Instant::now();
+
+        let entry = match self.backend.symlink(link.to_str().unwrap_or(""), parent, name.to_str().unwrap_or("")) {
+            Ok(entry) => entry,
+            Err(e) => {
+                reply.error(map_error(&e));
+                return;
+            }
+        };
+
+        let attr = entry_to_attr(&entry, req);
+
+        reply.entry(&TTL_FILE, &attr, 0);
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] symlink of path {} duration: {:?}", link.display(), duration).ok();
+            }
+        }
     }
 
-    fn readlink(&mut self,_req: &Request<'_>,_ino: u64,reply: fuser::ReplyData) {
-        reply.error(ENOSYS);
+    fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: fuser::ReplyData) {
+        let timer_start = Instant::now();
+
+        let target: String = match self.backend.readlink(ino) {
+            Ok(p) => p,
+            Err(e) => {
+                reply.error(map_error(&e));
+                return;
+            }
+        };
+
+        reply.data(target.as_bytes());
+
+        if self.speed_testing {
+            let duration = timer_start.elapsed();
+            if let Some(file) = self.speed_file.as_mut() {
+                use std::io::Write;
+                writeln!(file, "[speed] readlink of ino {} duration: {:?}", ino, duration).ok();
+            }
+        }
     }
 }

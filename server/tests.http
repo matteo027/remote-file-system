@@ -89,10 +89,21 @@ POST http://localhost:3000/api/links/1575933
 Content-Type: application/json
 
 {
-  "linkParentIno": "1581812",
+  "linkParentIno": "1",
   "linkName": "pippo_link.txt"
 }
 
 ###
 // Delete the link
 DELETE   http://localhost:3000/api/directories/1581812/files/pippo_link.txt
+
+###
+// Making a symbolic link
+POST http://localhost:3000/api/symlinks
+Content-Type: application/json
+
+{
+  "linkParentIno": "1",
+  "linkName": "pippo_symlink.txt",
+  "targetPath": "/pippo.txt"
+}

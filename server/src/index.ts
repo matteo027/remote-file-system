@@ -16,6 +16,7 @@ import { Path } from './entities/Path';
 const app = express();
 const PORT = process.env.PORT || 3000;
 process.env.PORT = PORT.toString();
+process.env
 
 app.use(express.json());
 

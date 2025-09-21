@@ -34,5 +34,7 @@ export function setRoutes(app: Express) {
     router.get('/api/files/:ino', isLoggedIn, rwController.read);
 
     router.post('/api/links/:targetIno', isLoggedIn, fileController.hardlink);
+    router.post('/api/symlinks', isLoggedIn, fileController.symlink);
+    router.get('/api/symlinks/:ino', isLoggedIn, fileController.readlink);
 
 }

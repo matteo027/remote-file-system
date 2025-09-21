@@ -5,6 +5,7 @@ import { User } from '../entities/User';
 import { Group } from '../entities/Group';
 import * as fs from 'node:fs/promises';
 import { Path } from '../entities/Path';
+import { permission } from 'node:process';
 
 export class FileController{
     public mkdir = async (req: Request, res: Response) => {
@@ -295,6 +296,8 @@ export class FileController{
                 fileRepo.findOne({ where: { ino: oldParentIno }, relations: ["owner", "group", "paths"] }),
                 fileRepo.findOne({ where: { ino: newParentInode }, relations: ["owner", "group", "paths"] }),
             ]);
+            console.log("oldParent", oldParent);
+            console.log("newParent", newParent);
 
             if (!oldParent) 
                 return res.status(404).json({ error: "ENOENT", message: "Old parent not found" });
@@ -316,7 +319,7 @@ export class FileController{
             const entry = await fileRepo.findOne({ where: { paths: {path: oldPath }}, relations: ["owner", "group", "paths"] }) as File | null;
             if (!entry) 
                 return res.status(404).json({ error: "ENOENT", message: "Source entry not found" });
-
+            console.log("entry trovata:", entry);
             try{
                 await fs.rename(fullOld,fullNew);
             }catch(err:any){
@@ -329,10 +332,15 @@ export class FileController{
             const pathObj = entry.paths.find(p => p.path === oldPath);
             if (!pathObj) 
                 return res.status(500).json({ error: "EIO", message: "Path data not found, manual cleanup required" });
-            pathObj.path = newPath;
-            await pathRepo.save(pathObj);
+            
+            const newPathObj = {
+                path: newPath,
+                file: entry
+            } as Path;
+            await pathRepo.remove(pathObj);
+            await pathRepo.save(newPathObj);
             const stats = await fs.lstat(fullNew,{bigint:true});
-            return res.status(200).json(toEntryJson(entry, stats, pathObj));
+            return res.status(200).json(toEntryJson(entry, stats, newPathObj));
         }catch(err:any){
             return res.status(500).json({ error: "EIO", message: "Not possible to rename", details: String(err?.message ?? err) });
         }
@@ -405,6 +413,117 @@ export class FileController{
         }
         catch(err:any){
             return res.status(500).json({ error: "EIO", message: "Not possible to create the hard link", details: String(err?.message ?? err) });
+        }
+
+    }
+
+    public symlink = async (req: Request, res: Response) => {
+        let targetPath = (req.body.targetPath) as string | "";
+        const dirLinkIno = parseIno(req.body.linkParentIno);
+        const linkName = (req.body.linkName) as string | "";
+
+        console.log("Symlink", {targetPath, dirLinkIno, linkName});
+        if(!dirLinkIno){
+            console.log("Missing link parent inode");
+            return res.status(400).json({ error: "EINVAL", message: "Parent link missing" });
+        }
+        if(!targetPath)
+            return res.status(400).json({ error: "EINVAL", message: "Target path missing" });
+        if (isBadName(linkName))
+            return res.status(400).json({ error: "EINVAL", message: "Invalid link name" });
+
+        const user = req.user as User | undefined;
+        if (!user) {
+            return res.status(500).json({ error: 'Not possible to retreive user data' });
+        }
+
+        try{
+            
+            const dirLink = await fileRepo.findOne({
+                where:{ ino: dirLinkIno },
+                relations:["owner", "group", "paths"]
+            }) as File | null;
+
+            if (!dirLink)
+                return res.status(404).json({ error: "ENOENT", message: `Link parent inode ${dirLinkIno} not found` });
+            if (dirLink.type !== 1) {
+                console.log("Link parent is not a directory");
+                return res.status(400).json({ error: "ENOTDIR", message: "Link parent is not a directory" });
+            }
+
+
+            if(!has_permissions(dirLink,1,user)){
+                console.log("No permission to create in the link parent");
+                return res.status(403).json({ error: "EACCES", message: `No permission to create in ${dirLink.paths[0].path}` });
+            }
+
+            const linkDbPath = childPathOf(dirLink.paths[0].path, linkName);
+            const linkFsPath = toFsPath(linkDbPath);
+
+            await fs.symlink(targetPath, linkFsPath);
+            const stats = await fs.lstat(linkFsPath,{bigint:true});
+
+            const link = {
+                ino: stats.ino.toString(),
+                owner: user,
+                group: dirLink.group,
+                type: 2,
+                permissions: 0o755,
+            } as File;
+            await fileRepo.save(link);
+
+            const linkPathObj = {
+                file: link,
+                path: linkDbPath
+            } as Path;
+            await pathRepo.save(linkPathObj);
+            
+            const linkStats = await fs.lstat(linkFsPath,{bigint:true});
+
+            return res.status(200).json(toEntryJson(link, linkStats, linkPathObj));
+
+        }
+        catch(err:any){
+            return res.status(500).json({ error: "EIO", message: "Not possible to create the symlink", details: String(err?.message ?? err) });
+        }
+
+    }
+
+    public readlink = async (req: Request, res: Response) => {
+        const linkIno = parseIno(req.params.ino);
+
+        if(!linkIno){
+            return res.status(400).json({ error: "EINVAL", message: "Link inode missing" });
+        }
+
+        const user = req.user as User | undefined;
+        if (!user) {
+            return res.status(500).json({ error: 'Not possible to retreive user data' });
+        }
+        
+        try{
+
+            const slink = await fileRepo.findOne({
+                where:{ ino: linkIno },
+                relations:["owner", "group", "paths"]
+            }) as File | null;
+            
+            if (!slink)
+                return res.status(404).json({ error: "ENOENT", message: `Link file ${linkIno} not found` });
+            if (slink.type !== 2){
+                console.log("File is not a symlink");
+                return res.status(400).json({ error: "EINVAL", message: "File is not a symlink" });
+            }
+            
+            const linkFsPath = toFsPath(slink.paths[0].path); // every path is valid, so we can take the first one
+            const target = await fs.readlink(linkFsPath);
+            console.log("READLINK: Symlink target:", target);
+
+            return res.status(200).json({ target });
+
+        }
+        catch(err:any){
+            return res.status(500).json({ error: "EIO", message: "Not possible to read the symlink", details: String(err?.message ?? err) });
         }
 
     }
