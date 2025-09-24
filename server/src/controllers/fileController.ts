@@ -296,8 +296,6 @@ export class FileController{
                 fileRepo.findOne({ where: { ino: oldParentIno }, relations: ["owner", "group", "paths"] }),
                 fileRepo.findOne({ where: { ino: newParentInode }, relations: ["owner", "group", "paths"] }),
             ]);
-            console.log("oldParent", oldParent);
-            console.log("newParent", newParent);
 
             if (!oldParent) 
                 return res.status(404).json({ error: "ENOENT", message: "Old parent not found" });
@@ -319,7 +317,6 @@ export class FileController{
             const entry = await fileRepo.findOne({ where: { paths: {path: oldPath }}, relations: ["owner", "group", "paths"] }) as File | null;
             if (!entry) 
                 return res.status(404).json({ error: "ENOENT", message: "Source entry not found" });
-            console.log("entry trovata:", entry);
             try{
                 await fs.rename(fullOld,fullNew);
             }catch(err:any){
@@ -352,7 +349,6 @@ export class FileController{
         const linkName = (req.body.linkName) as string | "";
 
         if(!dirLinkIno){
-            console.log("Missing link parent inode");
             return res.status(400).json({ error: "EINVAL", message: "Parent link missing" });
         }
         if(!targetIno)
@@ -422,7 +418,6 @@ export class FileController{
         const dirLinkIno = parseIno(req.body.linkParentIno);
         const linkName = (req.body.linkName) as string | "";
 
-        console.log("Symlink", {targetPath, dirLinkIno, linkName});
         if(!dirLinkIno){
             console.log("Missing link parent inode");
             return res.status(400).json({ error: "EINVAL", message: "Parent link missing" });
