@@ -101,7 +101,7 @@ impl Credentials {
                         .await
                         .map_err(|e| BackendError::Other(e.to_string()))?;
 
-                    println!("[auth] login status: {:?}", resp_login.status());
+                    eprintln!("[auth] login status: {:?}", resp_login.status());
 
                     if resp_login.status() == StatusCode::OK {
                         let sid = resp_login.cookies().find(|c| c.name() == "connect.sid").map(|c| c.value().to_string()).ok_or_else(|| BackendError::Other("Missing session cookie 'connect.sid'".into()))?;
@@ -406,7 +406,6 @@ impl RemoteBackend for HttpBackend {
         let endpoint = format!("api/symlinks/{}", ino);
 
         let rlr = self.request_response::<ReadLinkResponse, ()>(Method::GET, &endpoint, None)?;
-        println!("target: {}", rlr.target);
         Ok(rlr.target)
     }
 }
