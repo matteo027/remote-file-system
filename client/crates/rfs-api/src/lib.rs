@@ -408,4 +408,10 @@ impl RemoteBackend for HttpBackend {
         let rlr = self.request_response::<ReadLinkResponse, ()>(Method::GET, &endpoint, None)?;
         Ok(rlr.target)
     }
+    
+    fn lookup_by_path(&self, path:&str) -> Result<FileEntry, BackendError> {
+        let endpoint = format!("api/directories/lookup/{}", path);
+        let f: FileServerResponse = self.request_response::<FileServerResponse, ()>(Method::GET, &endpoint, None)?;
+        Ok(response_to_entry(f))
+    }
 }

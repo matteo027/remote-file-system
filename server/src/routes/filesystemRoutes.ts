@@ -37,4 +37,6 @@ export function setRoutes(app: Express) {
     router.post('/api/symlinks', isLoggedIn, fileController.symlink);
     router.get('/api/symlinks/:ino', isLoggedIn, fileController.readlink);
 
+    router.get('/api/directories/lookup/*', isLoggedIn, attrController.lookup_path);    
+
 }

@@ -82,7 +82,7 @@ pub trait RemoteBackend: Send + Sync {
     fn list_dir(&mut self, ino: u64) -> Result<Vec<FileEntry>, BackendError>;
     /// Ottiene metadati completi di un file o directory
     fn get_attr(&mut self, ino: u64) -> Result<FileEntry, BackendError>;
-    /// Cerca un file o directory per nome
+    /// Cerca un file o directory per ino
     fn lookup(&mut self, parent_ino:u64, name:&str) -> Result<FileEntry, BackendError>;
     /// Crea un file vuoto e restituisce i metadati
     fn create_file(&mut self, parent_ino:u64, name:&str) -> Result<FileEntry, BackendError>;
@@ -114,4 +114,8 @@ pub trait RemoteBackend: Send + Sync {
     fn get_attr_if_modified_since(&mut self, ino: u64, _since: SystemTime) -> Result<Option<FileEntry>, BackendError> {
         Ok(Some(self.get_attr(ino)?))
     }
+
+    // WINDOWS specific api calls
+    /// Cerca un file o directory per path
+    fn lookup_by_path(&self, path:&str) -> Result<FileEntry, BackendError>;
 }

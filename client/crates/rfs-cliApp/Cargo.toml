@@ -5,11 +5,17 @@ edition = "2024"
 
 [dependencies]
 clap = {version = "4.5.41", features = ["derive"]}
-daemonize = "0.5.0"
-fuser = "0.15.1"
 rfs-api = { version = "0.1.0", path = "../rfs-api" }
 rfs-cache = { version = "0.1.0", path = "../rfs-cache" }
-rfs-fuse = { version = "0.1.0", path = "../rfs-fuse" }
 rfs-models = { version = "0.1.0", path = "../rfs-models" }
 signal-hook = "0.3.18"
 tokio = "1.47.1"
+
+[target.'cfg(unix)'.dependencies]
+rfs-fuse = { version = "0.1.0", path = "../rfs-fuse" }
+fuser = { version = "0.15.1" }
+daemonize = { version = "0.5.0" }
+
+[target.'cfg(windows)'.dependencies]
+rfs-winfsp = { version = "0.1.0", path = "../rfs-winfsp" }
+winfsp = "0.11.3+winfsp-2.0"
