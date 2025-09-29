@@ -11,10 +11,10 @@ rfs-models = { version = "0.1.0", path = "../rfs-models" }
 signal-hook = "0.3.18"
 tokio = "1.47.1"
 
-[target.'cfg(unix)'.dependencies]
-rfs-fuse = { version = "0.1.0", path = "../rfs-fuse" }
-fuser = { version = "0.15.1" }
-daemonize = { version = "0.5.0" }
+# [target.'cfg(unix)'.dependencies]
+# rfs-fuse = { version = "0.1.0", path = "../rfs-fuse" }
+# fuser = { version = "0.15.1" }
+# daemonize = { version = "0.5.0" }
 
 [target.'cfg(windows)'.dependencies]
 rfs-winfsp = { version = "0.1.0", path = "../rfs-winfsp" }

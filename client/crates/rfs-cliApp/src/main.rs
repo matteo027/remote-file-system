@@ -8,7 +8,7 @@ use rfs_fuse::RemoteFS;
 #[cfg(target_os = "windows")]
 use rfs_winfsp::RemoteFS;
 #[cfg(target_os = "windows")]
-use winfsp::{self, winfsp_init};
+use winfsp;
 #[cfg(target_os = "windows")]
 use signal_hook::flag;
 use std::{fs::{create_dir_all, File}, sync::{Arc, Condvar, Mutex}};
@@ -24,7 +24,7 @@ use std::thread;
 use tokio::runtime::Builder;
 
 #[cfg(target_os = "windows")]
-const DEFAULT_MOUNT: &str = "C:\\mnt\\remote";
+const DEFAULT_MOUNT: &str = "X:";
 #[cfg(not(target_os = "windows"))]
 const DEFAULT_MOUNT: &str = "/home/matteo/mnt/remote";
 
@@ -79,8 +79,6 @@ fn main() {
 
     #[cfg(not(target_os = "windows"))]
     let options = vec![MountOption::FSName("Remote-FS".to_string()), MountOption::RW];
-    #[cfg(target_os = "windows")]
-    let options = vec!["Remote-FS".to_string(), "rw".to_string()];
 
     let runtime= Arc::new(Builder::new_multi_thread().enable_all().thread_name("rfs-runtime").build().expect("Unable to build a Runtime object"));
 
@@ -94,7 +92,7 @@ fn main() {
     //let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
     let fs = RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, file_speed);
     
-
+    #[cfg(not(target_os = "windows"))]
     create_dir_all(&cli.mount_point).expect("mount point does not exist and cannot be created");
     
     #[cfg(not(target_os = "windows"))] // linux or macOS
@@ -104,7 +102,7 @@ fn main() {
         use winfsp::host::VolumeParams;
         let mut host = winfsp::host::FileSystemHost::new(VolumeParams::new(), fs).expect("Unable o create a FileSystemHost");
         host.mount(&cli.mount_point).expect("Unable to mount the filesystem");
-        host.start()
+        host.start().expect("Unable to start the filesystem host")
     };
 
     let pair = Arc::new((Mutex::new(false), Condvar::new()));

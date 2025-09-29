@@ -117,5 +117,5 @@ pub trait RemoteBackend: Send + Sync {
 
     // WINDOWS specific api calls
     /// Cerca un file o directory per path
-    fn lookup_by_path(&self, path:&str) -> Result<FileEntry, BackendError>;
+    fn lookup_by_path(&mut self, path:&str) -> Result<FileEntry, BackendError>;
 }
