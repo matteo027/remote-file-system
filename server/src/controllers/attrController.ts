@@ -239,4 +239,37 @@ export class AttributeController{
             return res.status(500).json({ error: 'Not possible to perform the operation', details: err });
         }
     }
+
+    public lookup_path = async (req: Request, res: Response) => {
+        const dbPath = path.posix.join('/', req.params.path || '');
+
+        try {
+            const pathObj = await pathRepo.findOne({ where: { path: dbPath }, relations: ['file', 'file.owner', 'file.group'] }) as Path | null;
+            if (!pathObj || !pathObj.file) {
+                return res.status(500).json({ error: "EIO", message: dbPath + " not found in database" });
+            }
+            const file = pathObj.file;
+
+            if (!has_permissions(file, 0, req.user as User)) {
+                return res.status(403).json({ error: "EACCES", message: "No permission to access " + dbPath });
+            }
+
+            let fullFsPath = toFsPath(dbPath);
+            let stats;
+            try{
+                stats = await fs.lstat(fullFsPath, { bigint: true });
+            } catch (e:any){
+                if(e?.code === "ENOENT"){
+                    return res.status(404).json({ error: "ENOENT", message: `File ${dbPath} not found` });
+                }
+                throw e;
+            }
+
+            return res.status(200).json(toEntryJson(file, stats, pathObj));
+
+        }
+        catch (err: any) {
+            return res.status(500).json({ error: "EIO", message: "Lookup by path failed", details: String(err?.message ?? err) });
+        }
+    }
 }

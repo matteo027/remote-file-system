@@ -37,6 +37,9 @@ export function setRoutes(app: Express) {
     router.post('/api/symlinks', isLoggedIn, fileController.symlink);
     router.get('/api/symlinks/:ino', isLoggedIn, fileController.readlink);
 
-    router.get('/api/directories/lookup/*', isLoggedIn, attrController.lookup_path);    
-
+    router.use('/api/lookup', isLoggedIn, (req, res, next) => {
+        const path = req.url.replace(/^\//, ''); // rimuove lo slash iniziale
+        req.params = { path };
+        attrController.lookup_path(req, res);
+    });
 }

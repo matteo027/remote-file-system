@@ -107,3 +107,9 @@ Content-Type: application/json
   "linkName": "pippo_symlink.txt",
   "targetPath": "/pippo.txt"
 }
+
+###
+
+// Lookup for windows (by path)
+GET http://localhost:3000/api/lookup/5000
+Content-Type: application/json
