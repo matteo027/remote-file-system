@@ -153,7 +153,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
         }
     }
 
-    fn flush_file(&mut self, fh: u64, ino: u64) -> Result<(), BackendError> {
+    fn flush_file(&self, ino: u64) -> Result<(), BackendError> {
 
         let mut start_offset = 0 as u64;
         let mut last_offset = 0 as u64;
@@ -161,7 +161,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
         // Collect the map's contents into a vector to avoid double mutable borrow
         let map_entries: Vec<(u64, Vec<u8>)> = {
             let mut write_buffers = self.write_buffers.borrow_mut();
-            let map: &mut BTreeMap<u64, Vec<u8>> = write_buffers.get_mut(&fh).unwrap();
+            let map: &mut BTreeMap<u64, Vec<u8>> = write_buffers.get_mut(&ino).unwrap();
             let entries = map.iter().map(|(k, v)| (*k, v.clone())).collect();
             map.clear();
             entries
@@ -192,7 +192,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
         Ok(())
     }
 
-    fn flush_buffer(&mut self, buffer: &mut Vec<u8>, ino: u64, offset: u64) -> Result<(), BackendError> {
+    fn flush_buffer(&self, buffer: &mut Vec<u8>, ino: u64, offset: u64) -> Result<(), BackendError> {
         if !buffer.is_empty() {
             if buffer.len() > LARGE_FILE_SIZE as usize {
                 self.backend.borrow_mut().write_stream(ino, offset, buffer.clone())?
@@ -206,7 +206,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
 }
 
 impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
-    type FileContext = ();
+    type FileContext = Option<u64>;
 
     fn get_security_by_name(
         &self,
@@ -251,22 +251,31 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         entry_to_file_info(file_info_data, &entry);
         
         if entry.kind != EntryType::Directory {
-            let fh = self.next_fh.get();
-            self.next_fh.set(fh+1);
             
             if entry.size > LARGE_FILE_SIZE {
-                self.read_file_handles.borrow_mut().insert(fh, ReadMode::LargeStream(StreamState::new(entry.ino)));
+                self.read_file_handles.borrow_mut().insert(ino, ReadMode::LargeStream(StreamState::new(entry.ino)));
             } else {
-                self.read_file_handles.borrow_mut().insert(fh, ReadMode::SmallPages);
+                self.read_file_handles.borrow_mut().insert(ino, ReadMode::SmallPages);
             }
 
-            self.write_buffers.borrow_mut().insert(fh, BTreeMap::new());
+            self.write_buffers.borrow_mut().insert(ino, BTreeMap::new());
         }
         
-        Ok(())
+        Ok(Some(ino))
     }
 
     fn close(&self, context: Self::FileContext) {
-        todo!()
+        
+        if let Some(ino) = context {
+            
+            if let Err(e) = self.flush_file(ino) {
+                map_error(&e);
+            }
+            
+            // Rimuovi dalle strutture
+            self.read_file_handles.borrow_mut().remove(&ino);
+            self.write_buffers.borrow_mut().remove(&ino);
+        }
+
     }
 }
