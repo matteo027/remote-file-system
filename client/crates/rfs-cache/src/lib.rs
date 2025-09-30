@@ -47,23 +47,13 @@ impl <B:RemoteBackend> Cache<B> {
         self.meta.get(&ino).map(|e| e.mtime)
     }
 
-    #[inline]
-    fn invalidate_blocks(&mut self, ino: u64) {
-        self.file_blocks.pop(&ino);
-    }
-
-    #[inline]
-    fn invalidate_dir_listing(&mut self, dir_ino: u64) {
-        self.dir_child.pop(&dir_ino);
-    }
-
     fn revalidate_meta(&mut self, ino:u64) -> Result<FileEntry, BackendError> {
         let since= self.get_cached_mtime(ino).unwrap_or(SystemTime::UNIX_EPOCH);
         match self.http_backend.get_attr_if_modified_since(ino, since)? {
             Some(entry) => {
                 if let Some(prev) = self.get_cached_mtime(ino) {
                     if entry.mtime > prev {
-                        self.invalidate_blocks(ino);
+                        self.file_blocks.pop(&ino); // il file è cambiato, invalidiamo i blocchi
                     }
                 }
                 self.remember_meta(&entry);
@@ -123,7 +113,7 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
                 }
                 Some(_) => {
                     // la directory è cambiata, invalidiamo la cache
-                    self.invalidate_dir_listing(ino);
+                    self.dir_child.pop(&ino);
                 }
             }
         }
@@ -152,26 +142,26 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
     fn create_file(&mut self, parent_ino:u64, name:&str) -> Result<FileEntry, BackendError> {
         let res= self.http_backend.create_file(parent_ino, name)?;
         self.remember_meta(&res);
-        self.invalidate_dir_listing(parent_ino);
+        self.dir_child.pop(&parent_ino);
         Ok(res)
     }
 
     fn create_dir(&mut self, parent_ino:u64, name:&str) -> Result<FileEntry, BackendError> {
         let res= self.http_backend.create_dir(parent_ino, name)?;
         self.remember_meta(&res);
-        self.invalidate_dir_listing(parent_ino);
+        self.dir_child.pop(&parent_ino);
         Ok(res)
     }
 
     fn delete_file(&mut self, parent_ino:u64, name:&str) -> Result<(), BackendError> {
         self.http_backend.delete_file(parent_ino, name)?;
-        self.invalidate_dir_listing(parent_ino);
+        self.dir_child.pop(&parent_ino);
         Ok(())
     }
 
     fn delete_dir(&mut self, parent_ino:u64, name:&str) -> Result<(), BackendError> {
         self.http_backend.delete_dir(parent_ino, name)?;
-        self.invalidate_dir_listing(parent_ino);
+        self.dir_child.pop(&parent_ino);
         Ok(())
     }
 
@@ -222,9 +212,9 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
     fn rename(&mut self, old_parent_ino:u64, old_name: &str, new_parent_ino: u64, new_name: &str) -> Result<FileEntry, BackendError> {
         let res= self.http_backend.rename(old_parent_ino, old_name, new_parent_ino, new_name)?;
         self.remember_meta(&res);
-        self.invalidate_dir_listing(old_parent_ino);
+        self.dir_child.pop(&old_parent_ino);
         if old_parent_ino != new_parent_ino {
-            self.invalidate_dir_listing(new_parent_ino);
+            self.dir_child.pop(&new_parent_ino);
         }
         Ok(res)
     }
@@ -233,7 +223,7 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         let res= self.http_backend.set_attr(ino, attrs)?;
         if let Some(prev) = self.get_cached_mtime(ino) {
             if res.mtime > prev {
-                self.invalidate_blocks(ino);
+                self.file_blocks.pop(&ino); // il file è cambiato, invalidiamo i blocchi
             }
         }
         self.remember_meta(&res);
@@ -254,14 +244,14 @@ impl <B:RemoteBackend> RemoteBackend for Cache<B> {
         let res= self.http_backend.link(target_ino, link_parent_ino, link_name)?;
         self.meta.pop(&target_ino); // il numero di link è cambiato
         self.remember_meta(&res);
-        self.invalidate_dir_listing(link_parent_ino);
+        self.dir_child.pop(&link_parent_ino);
         Ok(res)
     }
 
     fn symlink(&mut self, target_path: &str, link_parent_ino: u64, link_name: &str) -> Result<FileEntry, BackendError> {
         let res = self.http_backend.symlink(target_path, link_parent_ino, link_name)?;
         self.remember_meta(&res);
-        self.invalidate_dir_listing(link_parent_ino);
+        self.dir_child.pop(&link_parent_ino);
         Ok(res)
     }
 
