@@ -4,7 +4,7 @@ use fuser::{MountOption};
 use rfs_fuse::RemoteFS;
 use std::{fs::{create_dir_all, File}, sync::{Arc, Condvar, Mutex}};
 use rfs_api::HttpBackend;
-//use rfs_cache::Cache;
+use rfs_cache::Cache;
 use signal_hook::{consts::signal::*, iterator::Signals};
 use std::thread;
 use tokio::runtime::Builder;
@@ -13,11 +13,11 @@ use tokio::runtime::Builder;
 #[command(name = "Remote-FS", version = "0.1.0")]
 struct Cli {
     /// Directory di mount del filesystem remoto in locale
-    #[arg(short, long, default_value = "/home/matteo/mnt/remote")]
+    #[arg(short, long, default_value = "/home/andrea/mnt/remote")]
     mount_point: String,
 
     /// Indirizzo del backend remoto
-    #[arg(short, long, default_value = "http://fzucca.com:25570")]
+    #[arg(short, long, default_value = "http://localhost:3000")]
     remote_address: String,
 
     /// Abilita la modalità speed testing (solo Linux e windows)
@@ -69,8 +69,8 @@ fn main() {
             std::process::exit(1);
         }
     }
-    //let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
-    let fs= RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, file_speed);
+    let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
+    let fs= RemoteFS::new(cache, runtime.clone(), cli.speed_testing, file_speed);
 
     create_dir_all(&cli.mount_point).expect("mount point does not exist and cannot be created");
     let session = fuser::spawn_mount2(fs, &cli.mount_point, &options).expect("failed to mount");
