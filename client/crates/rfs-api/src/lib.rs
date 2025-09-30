@@ -410,7 +410,7 @@ impl RemoteBackend for HttpBackend {
     }
     
     fn lookup_by_path(&mut self, path:&str) -> Result<FileEntry, BackendError> {
-        let endpoint = format!("api/directories/lookup/{}", path);
+        let endpoint = format!("api/lookup/{}", path.strip_prefix('/').unwrap_or(path));
         let f: FileServerResponse = self.request_response::<FileServerResponse, ()>(Method::GET, &endpoint, None)?;
         Ok(response_to_entry(f))
     }
