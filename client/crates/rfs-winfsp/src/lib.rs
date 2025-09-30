@@ -1,14 +1,15 @@
 #![cfg(windows)]
 
-use winfsp::filesystem::{FileInfo, FileSecurity, FileSystemContext};
-use winfsp_sys::FILE_ACCESS_RIGHTS;
-use winfsp::{FspError, Result as FspResult};
+use glob::Pattern;
+use winfsp::filesystem::{DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, ModificationDescriptor, OpenFileInfo, WideNameInfo};
+use winfsp_sys::{FILE_ACCESS_RIGHTS, FILE_FLAGS_AND_ATTRIBUTES};
+use winfsp::{FspError, Result as FspResult, U16CStr};
 use winapi::um::winnt::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT};
 use filetime::FileTime;
 use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream, BLOCK_SIZE, EntryType};
 use std::collections::{BTreeMap, HashMap};
 use std::cell::{RefCell, Cell};
-use std::ffi::OsStr;
+use std::ffi::{c_void, OsStr};
 use std::fs::File;
 use std::io::ErrorKind;
 use std::path::{Path};
@@ -132,7 +133,7 @@ pub struct RemoteFS<B: RemoteBackend> {
 
     // file handle management
     next_fh: Cell<u64>, // file handle da allocare
-    fh_to_ino: RefCell<HashMap<u64, u64>>,
+    fh_to_entry: RefCell<HashMap<u64, FileEntry>>,
     read_file_handles: RefCell<HashMap<u64, ReadMode>>, // mappa file handle, per gestire read in streaming continuo su file già aperti
     write_buffers: RefCell<HashMap<u64, BTreeMap<u64, Vec<u8>>>>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
 
@@ -148,7 +149,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
             rt: runtime,
             lookup_ino: RefCell::new(HashMap::new()),
             next_fh: Cell::new(3), //0,1,2 di solito sono assegnati, da controllare
-            fh_to_ino: RefCell::new(HashMap::new()),
+            fh_to_entry: RefCell::new(HashMap::new()),
             read_file_handles: RefCell::new(HashMap::new()),
             write_buffers: RefCell::new(HashMap::new()),
             speed_testing,
@@ -161,8 +162,8 @@ impl<B: RemoteBackend> RemoteFS<B> {
         let mut start_offset = 0u64;
         let mut last_offset = 0u64;
         let mut prev_block_size = 0u64;
-        let ino = match self.fh_to_ino.borrow().get(&fh) {
-            Some(i) => *i,
+        let ino = match self.fh_to_entry.borrow().get(&fh) {
+            Some(e) => e.ino,
             None => return Err(BackendError::NotFound(String::from("File handle associated to no ino"))),
         };
 
@@ -239,8 +240,8 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     fn open(
         &self,
         file_name: &winfsp::U16CStr,
-        create_options: u32,
-        granted_access: FILE_ACCESS_RIGHTS,
+        _create_options: u32,
+        _granted_access: FILE_ACCESS_RIGHTS,
         file_info: &mut winfsp::filesystem::OpenFileInfo,
     ) -> winfsp::Result<Self::FileContext> {
         let path = file_name.to_string_lossy();
@@ -252,7 +253,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         // getattr
         let entry = match self.backend.borrow_mut().get_attr(ino) {
             Ok(e) => e,
-            Err(_) => return Err(FspError::IO(ErrorKind::NotFound)),
+            Err(err) => return Err(map_error(&err)),
         };
 
         
@@ -262,10 +263,9 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
         let fh = self.next_fh.get();
         self.next_fh.set(fh + 1);
-        self.fh_to_ino.borrow_mut().insert(fh, entry.ino);
+        self.fh_to_entry.borrow_mut().insert(fh, entry.clone());
         
         if entry.kind != EntryType::Directory {
-            
             if entry.size > LARGE_FILE_SIZE {
                 self.read_file_handles.borrow_mut().insert(fh, ReadMode::LargeStream(StreamState::new(entry.ino)));
             } else {
@@ -273,10 +273,10 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
             }
 
             self.write_buffers.borrow_mut().insert(fh, BTreeMap::new());
-            Ok(Some(fh))
-        } else {
-            Ok(None)
+            
         }
+        
+        Ok(Some(fh))
     }
 
     fn close(&self, context: Self::FileContext) {
@@ -288,10 +288,243 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
             }
             
             // Rimuovi dalle strutture
-            self.fh_to_ino.borrow_mut().remove(&fh);
+            self.fh_to_entry.borrow_mut().remove(&fh);
             self.read_file_handles.borrow_mut().remove(&fh);
             self.write_buffers.borrow_mut().remove(&fh);
         }
 
+    }
+
+    fn create(
+        &self,
+        file_name: &U16CStr,
+        create_options: u32,
+        granted_access: FILE_ACCESS_RIGHTS,
+        file_attributes: FILE_FLAGS_AND_ATTRIBUTES,
+        _security_descriptor: Option<&[c_void]>,
+        _allocation_size: u64,
+        _extra_buffer: Option<&[u8]>,
+        _extra_buffer_is_reparse_point: bool,
+        file_info: &mut OpenFileInfo,
+    ) -> winfsp::Result<Self::FileContext> {
+        
+        let path = file_name.to_string_lossy();
+        let path_obj = Path::new(&path);
+        let parent_path = match path_obj.parent() {
+            Some(p) => p.to_string_lossy().to_string(),
+            None => "/".to_string(), // root directory
+        };
+        let f_name = match path_obj.file_name() {
+            Some(name) => name.to_string_lossy().to_string(),
+            None => return Err(FspError::IO(ErrorKind::InvalidInput)),
+        };
+        let parent_ino = match self.lookup_ino.borrow().get(&parent_path) {
+            Some(&ino) => ino,
+            None => return Err(FspError::IO(ErrorKind::NotFound)),
+        };
+
+        let entry = if (file_attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 {
+                match self.backend.borrow_mut().create_dir(parent_ino, &f_name) {
+                    Ok(e) => e,
+                    Err(err) => return Err(map_error(&err))
+                }
+            } else {
+                match self.backend.borrow_mut().create_file(parent_ino, &f_name) {
+                    Ok(e) => e,
+                    Err(err) => return Err(map_error(&err))
+                }
+        };
+
+        self.lookup_ino.borrow_mut().insert(path.to_string(), entry.ino);
+
+        self.open(file_name, create_options, granted_access, file_info)
+
+    }
+
+    /// Clean up a file.
+    fn cleanup(&self, context: &Self::FileContext, file_name: Option<&U16CStr>, flags: u32) {}
+
+    /// Flush a file or volume.
+    ///
+    /// If `context` is `None`, the request is to flush the entire volume.
+    fn flush(&self, context: Option<&Self::FileContext>, file_info: &mut FileInfo) -> winfsp::Result<()> {
+        todo!()
+    }
+
+    /// Get file or directory information.
+    fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> winfsp::Result<()> {
+        todo!()
+    }
+
+    /// Get file or directory security descriptor.
+    fn get_security(
+        &self,
+        context: &Self::FileContext,
+        security_descriptor: Option<&mut [c_void]>,
+    ) -> winfsp::Result<u64> {
+        todo!()
+    }
+
+    /// Set file or directory security descriptor.
+    fn set_security(
+        &self,
+        context: &Self::FileContext,
+        security_information: u32,
+        modification_descriptor: ModificationDescriptor,
+    ) -> winfsp::Result<()> {
+        todo!()
+    }
+
+    /// Overwrite a file.
+    fn overwrite(
+        &self,
+        context: &Self::FileContext,
+        file_attributes: FILE_FLAGS_AND_ATTRIBUTES,
+        replace_file_attributes: bool,
+        allocation_size: u64,
+        extra_buffer: Option<&[u8]>,
+        file_info: &mut FileInfo,
+    ) -> winfsp::Result<()> {
+        todo!()
+    }
+
+    /// Read directory entries from a directory handle.
+    fn read_directory(
+        &self,
+        context: &Self::FileContext,
+        pattern: Option<&U16CStr>,
+        marker: DirMarker,
+        buffer: &mut [u8],
+    ) -> winfsp::Result<u32> {
+        
+        let fh = context.ok_or(FspError::IO(ErrorKind::InvalidInput))?;
+
+        let dir_entry = match self.fh_to_entry.borrow().get(&fh) {
+            Some(entry) => entry.clone(),
+            None => return Err(FspError::IO(ErrorKind::NotFound)),
+        };
+        if dir_entry.kind != EntryType::Directory {
+            return Err(FspError::IO(ErrorKind::NotADirectory));
+        }
+
+        let entries = match self.backend.borrow_mut().list_dir(dir_entry.ino){
+            Ok(e) => e,
+            Err(err) => return Err(map_error(&err)),
+        };
+
+        let bytes_written = 0u32;
+        let pattern_str = pattern.map(|p| p.to_string_lossy().to_string());
+
+        let dir_buffer = DirBuffer::new();
+        let buffer_lock = dir_buffer.acquire(marker.is_none(), Some(entries.len() as u32))?;
+
+        for entry in entries.iter() {
+
+            // filter
+            if let Some(ref pat) = pattern_str {
+                match Pattern::new(pat) {
+                    Ok(p) => if !p.matches(&entry.name){
+                        continue;
+                    },
+                    Err(_) => return Err(FspError::IO(ErrorKind::InvalidInput)), // invalid pattern
+                }
+            }
+
+            let mut dir_info = DirInfo::<255>::new();
+            dir_info.set_name(&entry.name)?;
+
+            let file_info = dir_info.file_info_mut();
+            entry_to_file_info(file_info, entry);
+
+            buffer_lock.write(&mut dir_info)?;
+        }
+
+        drop(buffer_lock);
+
+        Ok(dir_buffer.read(marker, buffer))
+    }
+
+    /// Renames a file or directory.
+    fn rename(
+        &self,
+        context: &Self::FileContext,
+        file_name: &U16CStr,
+        new_file_name: &U16CStr,
+        replace_if_exists: bool,
+    ) -> winfsp::Result<()> {
+        todo!()
+    }
+
+    /// Set file or directory basic information.
+    #[allow(clippy::too_many_arguments)]
+    fn set_basic_info(
+        &self,
+        context: &Self::FileContext,
+        file_attributes: u32,
+        creation_time: u64,
+        last_access_time: u64,
+        last_write_time: u64,
+        last_change_time: u64,
+        file_info: &mut FileInfo,
+    ) -> winfsp::Result<()> {
+        todo!()
+    }
+
+    /// Set the file delete flag.
+    ///
+    /// ## Safety
+    /// The file should **never** be deleted in this function. Instead,
+    /// set a flag to indicate that the file is to be deleted later by
+    /// [`FileSystemContext::cleanup`](crate::filesystem::FileSystemContext::cleanup).
+    fn set_delete(
+        &self,
+        context: &Self::FileContext,
+        file_name: &U16CStr,
+        delete_file: bool,
+    ) -> winfsp::Result<()> {
+        todo!()
+    }
+
+    /// Set the file or allocation size.
+    fn set_file_size(
+        &self,
+        context: &Self::FileContext,
+        new_size: u64,
+        set_allocation_size: bool,
+        file_info: &mut FileInfo,
+    ) -> winfsp::Result<()> {
+        todo!()
+    }
+
+    /// Read from a file. Return the number of bytes read,
+    fn read(&self, context: &Self::FileContext, buffer: &mut [u8], offset: u64) -> winfsp::Result<u32> {
+        todo!()
+    }
+
+    /// Write to a file. Return the number of bytes written.
+    fn write(
+        &self,
+        context: &Self::FileContext,
+        buffer: &[u8],
+        offset: u64,
+        write_to_eof: bool,
+        constrained_io: bool,
+        file_info: &mut FileInfo,
+    ) -> winfsp::Result<u32> {
+        todo!()
+    }
+
+    /// Get directory information for a single file or directory within a parent directory.
+    ///
+    /// This method is only called when [VolumeParams::pass_query_directory_filename](crate::host::VolumeParams::pass_query_directory_filename)
+    /// is set to true, and the file system was created with [FileSystemParams::use_dir_info_by_name](crate::host::FileSystemParams).
+    /// set to true.
+    fn get_dir_info_by_name(
+        &self,
+        context: &Self::FileContext,
+        file_name: &U16CStr,
+        out_dir_info: &mut DirInfo,
+    ) -> winfsp::Result<()> {
+        todo!()
     }
 }

@@ -1288,6 +1288,7 @@ name = "rfs-winfsp"
 version = "0.1.0"
 dependencies = [
  "filetime",
+ "glob",
  "rfs-models",
  "tokio",
  "tokio-stream",
