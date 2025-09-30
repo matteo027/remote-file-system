@@ -9,3 +9,6 @@ rfs-models = { version = "0.1.0", path = "../rfs-models" }
 tokio = { version = "1.47.1", features = ["rt", "macros"] }
 tokio-stream = "0.1.17"
 winfsp-sys = "0.2.2"
+winapi = { version = "0.3.9", features = ["winnt"] }
+filetime = "0.2.26"
+glob = "0.3.3"
