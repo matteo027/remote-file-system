@@ -1,6 +1,6 @@
 use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow, consts};
 use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream, BLOCK_SIZE, EntryType};
-use libc::{EAGAIN, EBADF, EILSEQ, EINVAL, ENOENT, ENOSYS, ESTALE, O_ACCMODE, O_RDONLY, O_RDWR, O_WRONLY};
+use libc::{EAGAIN, EBADF, EINVAL, ENOENT, O_ACCMODE, O_RDONLY, O_RDWR, O_WRONLY};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fs::File;
@@ -80,7 +80,7 @@ fn entry_to_attr(entry: &FileEntry, req: &Request<'_>) -> FileAttr {
 }
 
 struct StreamState{
-    ino: u64,
+    // ino: u64, // non mi serve, lo associo già univocamente al file handle
     pos: u64,
     buffer: Vec<u8>,
     stream: Option<ByteStream>,
@@ -88,9 +88,8 @@ struct StreamState{
 }
 
 impl StreamState{
-    fn new(ino: u64)->Self{
+    fn new()->Self{
         Self{
-            ino,
             pos: 0,
             buffer: Vec::new(),
             stream: None,
@@ -109,10 +108,10 @@ pub struct RemoteFS<B: RemoteBackend> {
     rt: Arc<Runtime>, // runtime per eseguire le operazioni asincrone
 
     // inode/path management
-    //nlookup: HashMap<u64, u64>, //tiene riferimento al numero di riferimenti di naming per uno specifico inode, per gestire il caso di lookup multipli
+    dir_parent: HashMap<u64, u64>, // mappa inode directory al suo genitore per poter risolvere ".."
 
     // file handle management
-    next_fh: u64, // file handle da allocare
+    next_fh: u64, // file handle da allocare, per ora semplicemente incrementale
     read_file_handles: HashMap<u64, ReadMode>, // mappa file handle, per gestire read in streaming continuo su file già aperti
     write_buffers: HashMap<u64, BTreeMap<u64, Vec<u8>>>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
 
@@ -126,7 +125,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
         Self {
             backend,
             rt: runtime,
-            //nlookup: HashMap::new(),
+            dir_parent: HashMap::new(),
             next_fh: 3, //0,1,2 di solito sono assegnati, da controllare
             read_file_handles: HashMap::new(),
             write_buffers: HashMap::new(),
@@ -134,13 +133,6 @@ impl<B: RemoteBackend> RemoteFS<B> {
             speed_file,
         }
     }
-
-
-    // #[inline]
-    // fn bump_lookup(&mut self, ino: u64) {
-    //     let count = self.nlookup.entry(ino).or_insert(0);
-    //     *count += 1;
-    // }
 
     fn flush_file(&mut self, fh: u64, ino: u64) -> Result<(), BackendError> {
 
@@ -195,6 +187,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
 
 impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
     fn init(&mut self,_req: &Request<'_>,_config: &mut fuser::KernelConfig) -> Result<(), libc::c_int> { 
+        self.dir_parent.insert(1,1); // la root ha come genitore se stessa
         Ok(())
     }
 
@@ -207,7 +200,10 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         let timer_start = Instant::now();
 
         let metadata=match self.backend.lookup(parent,&name.to_string_lossy()) {
-            Ok(entry) => entry,
+            Ok(entry) => {
+                self.dir_parent.insert(entry.ino, parent); // aggiorna la mappa del genitore
+                entry
+            },
             Err(e) => {
                 reply.error(map_error(&e));
                 return;
@@ -261,16 +257,25 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         };
 
         // entries.sort_by(|a, b| a.name.cmp(&b.name)); // ordina le voci per nome
+        let mut off = offset;
 
-        // if off == 0 {
-        //     let _ = reply.add(ino, 1, FileType::Directory, ".");
-        //     let parent_path = dir.parent().unwrap_or(Path::new("/"));
-        //     let parent_ino = self.get_or_assign_ino(parent_path);
-        //     let _ = reply.add(parent_ino, 2, FileType::Directory, "..");
-        //     off = 2;
-        // }
 
-        let start = (offset - 2).max(0) as usize;
+        if off == 0 {
+            // . 
+            if reply.add(ino, 1, FileType::Directory, ".") {
+                reply.ok();
+                return;
+            }
+
+            let parent_ino = *self.dir_parent.get(&ino).unwrap_or(&ino);
+            if reply.add(parent_ino, 2, FileType::Directory, "..") {
+                reply.ok();
+                return;
+            }
+            off = 2;
+        }
+
+        let start = (off - 2).max(0) as usize;
         for (i, entry) in entries.iter().enumerate().skip(start) {
             let ftype= match entry.kind {
                 EntryType::File => FileType::RegularFile,
@@ -405,7 +410,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         let mut fuse_flags = consts::FOPEN_DIRECT_IO; // default, non usare cache del kernel
         if (flags & O_ACCMODE) == O_RDONLY || (flags & O_ACCMODE) == O_RDWR {
             let (ff, mode) = if size > LARGE_FILE_SIZE {
-                (consts::FOPEN_DIRECT_IO | FOPEN_NONSEEKABLE, ReadMode::LargeStream(StreamState::new(ino)))
+                (consts::FOPEN_DIRECT_IO | FOPEN_NONSEEKABLE, ReadMode::LargeStream(StreamState::new()))
             } else {
                 (consts::FOPEN_KEEP_CACHE, ReadMode::SmallPages)
             };
@@ -668,7 +673,6 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
 
     }
 
-    // Segnalo come non implementati i metodi relativi a link simbolici e hard link
     fn link(&mut self, req: &Request<'_>, ino: u64, new_parent: u64, new_name: &OsStr,reply: ReplyEntry) {
         let timer_start = Instant::now();
 
@@ -696,7 +700,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
     fn symlink(&mut self, req: &Request<'_>, parent: u64, name: &OsStr, link: &Path, reply: ReplyEntry) {
         let timer_start = Instant::now();
 
-        let entry = match self.backend.symlink(link.to_str().unwrap_or(""), parent, name.to_str().unwrap_or("")) {
+        let entry = match self.backend.symlink(&link.to_string_lossy(), parent, &name.to_string_lossy()) {
             Ok(entry) => entry,
             Err(e) => {
                 reply.error(map_error(&e));
