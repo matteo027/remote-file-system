@@ -161,17 +161,19 @@ impl<B: RemoteBackend> RemoteFS<B> {
         for (off, data) in map_entries.iter() {
 
             if buffer.is_empty() || last_offset + prev_block_size as u64 == *off {
-                last_offset = *off;
-                prev_block_size = data.len() as u64;
+                if buffer.is_empty() {
+                    start_offset = *off;
+                }
                 buffer.extend_from_slice(&data);
             } else {
                 // Flush the current buffer
                 self.flush_buffer(&mut buffer, ino, start_offset)?;
-
                 start_offset = *off;
-                last_offset = *off;
+                buffer.clear();
                 buffer.extend_from_slice(&data);
             }
+            last_offset = *off;
+            prev_block_size = data.len() as u64;
         }
 
         // flushing last bytes

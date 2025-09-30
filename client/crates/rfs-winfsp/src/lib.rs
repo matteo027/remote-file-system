@@ -62,8 +62,9 @@ fn map_error(error: &BackendError) -> FspError {
 // SystemTime → Windows FILETIME
 fn system_time_to_filetime(time: SystemTime) -> u64 {
     let ft = FileTime::from(time);
-    // FileTime ha metodi per ottenere il valore raw Windows
-    ft.unix_seconds() as u64 * 10_000_000 + (ft.nanoseconds() / 100) as u64 + 116444736000000000
+    let unix_seconds = ft.unix_seconds() as u64;
+    let windows_seconds = unix_seconds + 11644473600; // Epoch difference: 1601→1970
+    windows_seconds * 10_000_000 + (ft.nanoseconds() as u64 / 100)
 }
 
 #[inline]
@@ -131,6 +132,7 @@ pub struct RemoteFS<B: RemoteBackend> {
 
     // file handle management
     next_fh: Cell<u64>, // file handle da allocare
+    fh_to_ino: RefCell<HashMap<u64, u64>>,
     read_file_handles: RefCell<HashMap<u64, ReadMode>>, // mappa file handle, per gestire read in streaming continuo su file già aperti
     write_buffers: RefCell<HashMap<u64, BTreeMap<u64, Vec<u8>>>>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
 
@@ -146,6 +148,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
             rt: runtime,
             lookup_ino: RefCell::new(HashMap::new()),
             next_fh: Cell::new(3), //0,1,2 di solito sono assegnati, da controllare
+            fh_to_ino: RefCell::new(HashMap::new()),
             read_file_handles: RefCell::new(HashMap::new()),
             write_buffers: RefCell::new(HashMap::new()),
             speed_testing,
@@ -153,15 +156,20 @@ impl<B: RemoteBackend> RemoteFS<B> {
         }
     }
 
-    fn flush_file(&self, ino: u64) -> Result<(), BackendError> {
+    fn flush_file(&self, fh: u64) -> Result<(), BackendError> {
 
-        let mut start_offset = 0 as u64;
-        let mut last_offset = 0 as u64;
-        let mut prev_block_size = 0 as u64;
+        let mut start_offset = 0u64;
+        let mut last_offset = 0u64;
+        let mut prev_block_size = 0u64;
+        let ino = match self.fh_to_ino.borrow().get(&fh) {
+            Some(i) => *i,
+            None => return Err(BackendError::NotFound(String::from("File handle associated to no ino"))),
+        };
+
         // Collect the map's contents into a vector to avoid double mutable borrow
         let map_entries: Vec<(u64, Vec<u8>)> = {
             let mut write_buffers = self.write_buffers.borrow_mut();
-            let map: &mut BTreeMap<u64, Vec<u8>> = write_buffers.get_mut(&ino).unwrap();
+            let map: &mut BTreeMap<u64, Vec<u8>> = write_buffers.get_mut(&fh).unwrap();
             let entries = map.iter().map(|(k, v)| (*k, v.clone())).collect();
             map.clear();
             entries
@@ -171,17 +179,19 @@ impl<B: RemoteBackend> RemoteFS<B> {
         for (off, data) in map_entries.iter() {
 
             if buffer.is_empty() || last_offset + prev_block_size as u64 == *off {
-                last_offset = *off;
-                prev_block_size = data.len() as u64;
+                if buffer.is_empty() {
+                    start_offset = *off;
+                }
                 buffer.extend_from_slice(&data);
             } else {
                 // Flush the current buffer
                 self.flush_buffer(&mut buffer, ino, start_offset)?;
-
                 start_offset = *off;
-                last_offset = *off;
+                buffer.clear();
                 buffer.extend_from_slice(&data);
             }
+            last_offset = *off;
+            prev_block_size = data.len() as u64;
         }
 
         // flushing last bytes
@@ -206,7 +216,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
 }
 
 impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
-    type FileContext = Option<u64>;
+    type FileContext = Option<u64>; // file handle
 
     fn get_security_by_name(
         &self,
@@ -249,32 +259,38 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         // updating OpenFileInfo with file's metadata
         let file_info_data = file_info.as_mut();
         entry_to_file_info(file_info_data, &entry);
+
+        let fh = self.next_fh.get();
+        self.next_fh.set(fh + 1);
+        self.fh_to_ino.borrow_mut().insert(fh, entry.ino);
         
         if entry.kind != EntryType::Directory {
             
             if entry.size > LARGE_FILE_SIZE {
-                self.read_file_handles.borrow_mut().insert(ino, ReadMode::LargeStream(StreamState::new(entry.ino)));
+                self.read_file_handles.borrow_mut().insert(fh, ReadMode::LargeStream(StreamState::new(entry.ino)));
             } else {
-                self.read_file_handles.borrow_mut().insert(ino, ReadMode::SmallPages);
+                self.read_file_handles.borrow_mut().insert(fh, ReadMode::SmallPages);
             }
 
-            self.write_buffers.borrow_mut().insert(ino, BTreeMap::new());
+            self.write_buffers.borrow_mut().insert(fh, BTreeMap::new());
+            Ok(Some(fh))
+        } else {
+            Ok(None)
         }
-        
-        Ok(Some(ino))
     }
 
     fn close(&self, context: Self::FileContext) {
         
-        if let Some(ino) = context {
+        if let Some(fh) = context {
             
-            if let Err(e) = self.flush_file(ino) {
-                map_error(&e);
+            if let Err(e) = self.flush_file(fh) {
+                map_error(&e); // prints the error
             }
             
             // Rimuovi dalle strutture
-            self.read_file_handles.borrow_mut().remove(&ino);
-            self.write_buffers.borrow_mut().remove(&ino);
+            self.fh_to_ino.borrow_mut().remove(&fh);
+            self.read_file_handles.borrow_mut().remove(&fh);
+            self.write_buffers.borrow_mut().remove(&fh);
         }
 
     }
