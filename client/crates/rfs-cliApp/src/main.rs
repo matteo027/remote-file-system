@@ -3,7 +3,7 @@ use rfs_api::HttpBackend;
 use std::fs::{create_dir_all, File};
 use std::sync::{Arc, Mutex, Condvar};
 use tokio::runtime::Builder;
-use signal_hook::{consts::*, iterator::Signals};
+use signal_hook::{consts::*};
 use std::thread;
 
 #[cfg(unix)]
@@ -13,7 +13,7 @@ use fuser::MountOption;
 #[cfg(unix)]
 use rfs_fuse::RemoteFS;
 #[cfg(unix)]
-//use rfs_cache::Cache;
+use rfs_cache::Cache;
 
 #[cfg(target_os = "windows")]
 use rfs_winfsp::RemoteFS;
@@ -139,6 +139,8 @@ fn main() {
     #[cfg(target_os = "windows")]
     {
         use std::sync::atomic::{AtomicBool, Ordering};
+
+        use signal_hook::flag;
         let term = Arc::new(AtomicBool::new(false));
 
         flag::register(SIGINT, term.clone()).expect("register SIGINT");
