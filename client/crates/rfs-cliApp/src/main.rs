@@ -13,8 +13,10 @@ use daemonize::Daemonize;
 use fuser::MountOption;
 #[cfg(unix)]
 use rfs_fuse::RemoteFS;
+//#[cfg(unix)]
+//se rfs_cache::Cache;
 #[cfg(unix)]
-use rfs_cache::Cache;
+use signal_hook::iterator::Signals;
 
 #[cfg(target_os = "windows")]
 use rfs_winfsp::RemoteFS;
@@ -63,10 +65,10 @@ fn main() {
     };
     
     // --- Logging + daemonize (solo Linux) ---
+    let mut file_speed: Option<File> = None;
     
     #[cfg(target_os = "linux")]
     {
-        let mut file_speed: Option<File> = None;
         let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
         let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
         if cli.speed_testing {
@@ -111,12 +113,12 @@ fn main() {
     
     // signal handling
     let pair = Arc::new((Mutex::new(false), Condvar::new()));
+    let pair_clone = pair.clone();
 
     #[cfg(unix)]
     {
         thread::spawn(move || {
             let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT, SIGHUP]).expect("Unable to create signals to listen to");
-            let pair_clone = pair.clone();
             for signal in signals.forever() {
                 match signal {
                     SIGINT | SIGTERM | SIGQUIT | SIGHUP => {
@@ -146,7 +148,6 @@ fn main() {
         flag::register(SIGINT, term.clone()).expect("register SIGINT");
         flag::register(SIGTERM, term.clone()).expect("register SIGTERM");
 
-        let pair_clone = pair.clone();
         let term_clone = term.clone();
         thread::spawn(move || {
             // Polling leggero dell’AtomicBool

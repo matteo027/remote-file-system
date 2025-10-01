@@ -2,7 +2,7 @@
 
 use fuser::{FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow, consts};
 use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream, BLOCK_SIZE, EntryType};
-use libc::{EAGAIN, EBADF, EILSEQ, EINVAL, ENOENT, ENOSYS, ESTALE, O_ACCMODE, O_RDONLY, O_RDWR, O_WRONLY};
+use libc::{EAGAIN, EBADF, EINVAL, ENOENT, O_ACCMODE, O_RDONLY, O_RDWR, O_WRONLY};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fs::File;
@@ -82,7 +82,7 @@ fn entry_to_attr(entry: &FileEntry, req: &Request<'_>) -> FileAttr {
 }
 
 struct StreamState{
-    ino: u64,
+    //ino: u64,
     pos: u64,
     buffer: Vec<u8>,
     stream: Option<ByteStream>,
@@ -90,9 +90,8 @@ struct StreamState{
 }
 
 impl StreamState{
-    fn new(ino: u64)->Self{
+    fn new()->Self{
         Self{
-            ino,
             pos: 0,
             buffer: Vec::new(),
             stream: None,
@@ -409,7 +408,7 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         let mut fuse_flags = consts::FOPEN_DIRECT_IO; // default, non usare cache del kernel
         if (flags & O_ACCMODE) == O_RDONLY || (flags & O_ACCMODE) == O_RDWR {
             let (ff, mode) = if size > LARGE_FILE_SIZE {
-                (consts::FOPEN_DIRECT_IO | FOPEN_NONSEEKABLE, ReadMode::LargeStream(StreamState::new(ino)))
+                (consts::FOPEN_DIRECT_IO | FOPEN_NONSEEKABLE, ReadMode::LargeStream(StreamState::new()))
             } else {
                 (consts::FOPEN_KEEP_CACHE, ReadMode::SmallPages)
             };
