@@ -1,19 +1,19 @@
 #![cfg(windows)]
 
 use glob::Pattern;
-use winfsp::filesystem::{DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, ModificationDescriptor, OpenFileInfo, WideNameInfo};
+use winfsp::filesystem::{DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, ModificationDescriptor, OpenFileInfo, VolumeInfo, WideNameInfo};
 use winfsp_sys::{FILE_ACCESS_RIGHTS, FILE_FLAGS_AND_ATTRIBUTES};
 use winfsp::{FspError, Result as FspResult, U16CStr};
-use winapi::um::winnt::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT};
+use winapi::um::winnt::{FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, IO_REPARSE_TAG_SYMLINK};
 use filetime::FileTime;
 use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStream, BLOCK_SIZE, EntryType};
 use std::collections::{BTreeMap, HashMap};
-use std::cell::{RefCell, Cell};
 use std::ffi::{c_void, OsStr};
 use std::fs::File;
 use std::io::ErrorKind;
 use std::path::{Path};
-use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
@@ -62,10 +62,21 @@ fn map_error(error: &BackendError) -> FspError {
 
 // SystemTime → Windows FILETIME
 fn system_time_to_filetime(time: SystemTime) -> u64 {
-    let ft = FileTime::from(time);
-    let unix_seconds = ft.unix_seconds() as u64;
-    let windows_seconds = unix_seconds + 11644473600; // Epoch difference: 1601→1970
-    windows_seconds * 10_000_000 + (ft.nanoseconds() as u64 / 100)
+    match time.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(duration) => {
+            let unix_seconds = duration.as_secs();
+            let nanoseconds = duration.subsec_nanos();
+
+            let windows_seconds = unix_seconds + 11644473600; // 1970 -> 1601
+            
+            // Windows FILETIME: 100-nanosecond intervals since January 1, 1601
+            windows_seconds * 10_000_000 + (nanoseconds as u64 / 100)
+        },
+        Err(_) => {
+            eprintln!("Warning: Invalid timestamp, using default");
+            116444736000000000  // January 1, 1970 in Windows FILETIME
+        }
+    }
 }
 
 #[inline]
@@ -96,6 +107,15 @@ fn entry_to_file_info(file_info: &mut FileInfo, entry: &FileEntry) -> () {
     file_info.last_access_time = system_time_to_filetime(entry.atime);
     file_info.last_write_time = system_time_to_filetime(entry.mtime);
     file_info.change_time = system_time_to_filetime(entry.ctime);
+    
+    file_info.index_number = entry.ino;
+    file_info.hard_links = entry.nlinks;
+    file_info.ea_size = 0; // extended attributes size
+
+    file_info.reparse_tag = match entry.kind { // symlink
+        EntryType::Symlink => IO_REPARSE_TAG_SYMLINK,
+        _ => 0,
+    };
 
 }
 
@@ -125,35 +145,35 @@ enum ReadMode{
 }
 
 pub struct RemoteFS<B: RemoteBackend> {
-    backend: RefCell<B>,
+    backend: Mutex<B>,
     rt: Arc<Runtime>, // runtime per eseguire le operazioni asincrone
 
     // inode/path management
-    lookup_ino: RefCell<HashMap<String, u64>>, //tiene riferimento al numero di riferimenti di naming per uno specifico inode, per gestire il caso di lookup multipli
+    lookup_ino: Mutex<HashMap<String, u64>>, //tiene riferimento al numero di riferimenti di naming per uno specifico inode, per gestire il caso di lookup multipli
 
     // file handle management
-    next_fh: Cell<u64>, // file handle da allocare
-    fh_to_entry: RefCell<HashMap<u64, FileEntry>>,
-    read_file_handles: RefCell<HashMap<u64, ReadMode>>, // mappa file handle, per gestire read in streaming continuo su file già aperti
-    write_buffers: RefCell<HashMap<u64, BTreeMap<u64, Vec<u8>>>>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
+    next_fh: AtomicU64, // file handle da allocare
+    fh_to_entry: Mutex<HashMap<u64, FileEntry>>,
+    read_file_handles: Mutex<HashMap<u64, ReadMode>>, // mappa file handle, per gestire read in streaming continuo su file già aperti
+    write_buffers: Mutex<HashMap<u64, BTreeMap<u64, Vec<u8>>>>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
 
     // opzioni di testing
     speed_testing: bool,
-    speed_file: RefCell<Option<File>>,
+    speed_file: Mutex<Option<File>>,
 }
 
 impl<B: RemoteBackend> RemoteFS<B> {
     pub fn new(backend: B,runtime: Arc<Runtime>,speed_testing: bool,speed_file: Option<File>) -> Self {
         Self {
-            backend: RefCell::new(backend),
+            backend: Mutex::new(backend),
             rt: runtime,
-            lookup_ino: RefCell::new(HashMap::new()),
-            next_fh: Cell::new(3), //0,1,2 di solito sono assegnati, da controllare
-            fh_to_entry: RefCell::new(HashMap::new()),
-            read_file_handles: RefCell::new(HashMap::new()),
-            write_buffers: RefCell::new(HashMap::new()),
+            lookup_ino: Mutex::new(HashMap::new()),
+            next_fh: AtomicU64::new(3), //0,1,2 di solito sono assegnati, da controllare
+            fh_to_entry: Mutex::new(HashMap::new()),
+            read_file_handles: Mutex::new(HashMap::new()),
+            write_buffers: Mutex::new(HashMap::new()),
             speed_testing,
-            speed_file: RefCell::new(speed_file),
+            speed_file: Mutex::new(speed_file),
         }
     }
 
@@ -162,14 +182,16 @@ impl<B: RemoteBackend> RemoteFS<B> {
         let mut start_offset = 0u64;
         let mut last_offset = 0u64;
         let mut prev_block_size = 0u64;
-        let ino = match self.fh_to_entry.borrow().get(&fh) {
+
+        let ino = match self.fh_to_entry.lock().expect("mutex poisoned").get(&fh) {
             Some(e) => e.ino,
             None => return Err(BackendError::NotFound(String::from("File handle associated to no ino"))),
         };
 
         // Collect the map's contents into a vector to avoid double mutable borrow
         let map_entries: Vec<(u64, Vec<u8>)> = {
-            let mut write_buffers = self.write_buffers.borrow_mut();
+            let write_buffers_lock = self.write_buffers.lock().expect("mutex poisoned");
+            let mut write_buffers = write_buffers_lock;
             let map: &mut BTreeMap<u64, Vec<u8>> = write_buffers.get_mut(&fh).unwrap();
             let entries = map.iter().map(|(k, v)| (*k, v.clone())).collect();
             map.clear();
@@ -206,9 +228,9 @@ impl<B: RemoteBackend> RemoteFS<B> {
     fn flush_buffer(&self, buffer: &mut Vec<u8>, ino: u64, offset: u64) -> Result<(), BackendError> {
         if !buffer.is_empty() {
             if buffer.len() > LARGE_FILE_SIZE as usize {
-                self.backend.borrow_mut().write_stream(ino, offset, buffer.clone())?
+                self.backend.lock().expect("Mutex poisoned").write_stream(ino, offset, buffer.clone())?
             } else {
-                self.backend.borrow_mut().write_chunk(ino, offset, buffer.clone())?;
+                self.backend.lock().expect("Mutex poisoned").write_chunk(ino, offset, buffer.clone())?;
             }
         }
         buffer.clear();
@@ -225,14 +247,16 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         security_descriptor: Option<&mut [std::ffi::c_void]>,
         _reparse_point_resolver: impl FnOnce(&winfsp::U16CStr) -> Option<winfsp::filesystem::FileSecurity>, // symlink managed server-side
     ) -> winfsp::Result<winfsp::filesystem::FileSecurity> {
-        let path = file_name.to_string_lossy();
+        println!("get_security_by_name");
+        let path = file_name.to_string_lossy().replace('\\', &String::from('/'));
+        println!("path: {}", path);
         
-        let entry: FileEntry = match self.backend.borrow_mut().lookup_by_path(&path) {
+        let entry: FileEntry = match self.backend.lock().expect("Mutex poisoned").lookup_by_path(&path) {
             Ok(e) => e,
             Err(err) => return Err(map_error(&err)),
         };
 
-        self.lookup_ino.borrow_mut().insert(path, entry.ino);
+        self.lookup_ino.lock().expect("Mutex poisoned").insert(path, entry.ino);
         
         Ok(entry_to_file_security(&entry, security_descriptor))
     }
@@ -244,14 +268,15 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         _granted_access: FILE_ACCESS_RIGHTS,
         file_info: &mut winfsp::filesystem::OpenFileInfo,
     ) -> winfsp::Result<Self::FileContext> {
+        println!("open");
         let path = file_name.to_string_lossy();
         // lookup
-        let ino = match self.lookup_ino.borrow().get(&path) {
+        let ino = match self.lookup_ino.lock().expect("Mutex poisoned").get(&path) {
             Some(&ino) => ino,
             None => return Err(FspError::IO(ErrorKind::NotFound)),
         };
         // getattr
-        let entry = match self.backend.borrow_mut().get_attr(ino) {
+        let entry = match self.backend.lock().expect("Mutex poisoned").get_attr(ino) {
             Ok(e) => e,
             Err(err) => return Err(map_error(&err)),
         };
@@ -261,18 +286,18 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         let file_info_data = file_info.as_mut();
         entry_to_file_info(file_info_data, &entry);
 
-        let fh = self.next_fh.get();
-        self.next_fh.set(fh + 1);
-        self.fh_to_entry.borrow_mut().insert(fh, entry.clone());
+        let fh = self.next_fh.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        
+        self.fh_to_entry.lock().expect("Mutex poisoned").insert(fh, entry.clone());
         
         if entry.kind != EntryType::Directory {
             if entry.size > LARGE_FILE_SIZE {
-                self.read_file_handles.borrow_mut().insert(fh, ReadMode::LargeStream(StreamState::new(entry.ino)));
+                self.read_file_handles.lock().expect("Mutex poisoned").insert(fh, ReadMode::LargeStream(StreamState::new(entry.ino)));
             } else {
-                self.read_file_handles.borrow_mut().insert(fh, ReadMode::SmallPages);
+                self.read_file_handles.lock().expect("Mutex poisoned").insert(fh, ReadMode::SmallPages);
             }
 
-            self.write_buffers.borrow_mut().insert(fh, BTreeMap::new());
+            self.write_buffers.lock().expect("Mutex poisoned").insert(fh, BTreeMap::new());
             
         }
         
@@ -280,6 +305,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     }
 
     fn close(&self, context: Self::FileContext) {
+        println!("close");
         
         if let Some(fh) = context {
             
@@ -288,9 +314,9 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
             }
             
             // Rimuovi dalle strutture
-            self.fh_to_entry.borrow_mut().remove(&fh);
-            self.read_file_handles.borrow_mut().remove(&fh);
-            self.write_buffers.borrow_mut().remove(&fh);
+            self.fh_to_entry.lock().expect("Mutex poisoned").remove(&fh);
+            self.read_file_handles.lock().expect("Mutex poisoned").remove(&fh);
+            self.write_buffers.lock().expect("Mutex poisoned").remove(&fh);
         }
 
     }
@@ -307,6 +333,8 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         _extra_buffer_is_reparse_point: bool,
         file_info: &mut OpenFileInfo,
     ) -> winfsp::Result<Self::FileContext> {
+
+        println!("create");
         
         let path = file_name.to_string_lossy();
         let path_obj = Path::new(&path);
@@ -318,42 +346,59 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
             Some(name) => name.to_string_lossy().to_string(),
             None => return Err(FspError::IO(ErrorKind::InvalidInput)),
         };
-        let parent_ino = match self.lookup_ino.borrow().get(&parent_path) {
+        let parent_ino = match self.lookup_ino.lock().expect("Mutex poisoned").get(&parent_path) {
             Some(&ino) => ino,
             None => return Err(FspError::IO(ErrorKind::NotFound)),
         };
 
         let entry = if (file_attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 {
-                match self.backend.borrow_mut().create_dir(parent_ino, &f_name) {
+                match self.backend.lock().expect("Mutex poisoned").create_dir(parent_ino, &f_name) {
                     Ok(e) => e,
                     Err(err) => return Err(map_error(&err))
                 }
             } else {
-                match self.backend.borrow_mut().create_file(parent_ino, &f_name) {
+                match self.backend.lock().expect("Mutex poisoned").create_file(parent_ino, &f_name) {
                     Ok(e) => e,
                     Err(err) => return Err(map_error(&err))
                 }
         };
 
-        self.lookup_ino.borrow_mut().insert(path.to_string(), entry.ino);
+        self.lookup_ino.lock().expect("Mutex poisoned").insert(path.to_string(), entry.ino);
 
         self.open(file_name, create_options, granted_access, file_info)
 
     }
 
     /// Clean up a file.
-    fn cleanup(&self, context: &Self::FileContext, file_name: Option<&U16CStr>, flags: u32) {}
+    fn cleanup(&self, context: &Self::FileContext, file_name: Option<&U16CStr>, flags: u32) {
+        println!("cleanup");
+        todo!()
+    }
 
     /// Flush a file or volume.
     ///
     /// If `context` is `None`, the request is to flush the entire volume.
     fn flush(&self, context: Option<&Self::FileContext>, file_info: &mut FileInfo) -> winfsp::Result<()> {
+        println!("flush");
         todo!()
     }
 
-    /// Get file or directory information.
     fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> winfsp::Result<()> {
-        todo!()
+        println!("get_file_info");
+        
+        let fh = context.ok_or(FspError::IO(ErrorKind::InvalidInput))?;
+        
+        let entry = {
+            let fh_entries = self.fh_to_entry.lock().map_err(|_| FspError::IO(ErrorKind::Other))?;
+            match fh_entries.get(&fh) {
+                Some(entry) => entry.clone(),
+                None => return Err(FspError::IO(ErrorKind::NotFound)),
+            }
+        };
+        
+        entry_to_file_info(file_info, &entry);
+        
+        Ok(())
     }
 
     /// Get file or directory security descriptor.
@@ -362,6 +407,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         context: &Self::FileContext,
         security_descriptor: Option<&mut [c_void]>,
     ) -> winfsp::Result<u64> {
+        println!("get_security");
         todo!()
     }
 
@@ -372,6 +418,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         security_information: u32,
         modification_descriptor: ModificationDescriptor,
     ) -> winfsp::Result<()> {
+        println!("set_security");
         todo!()
     }
 
@@ -385,6 +432,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         extra_buffer: Option<&[u8]>,
         file_info: &mut FileInfo,
     ) -> winfsp::Result<()> {
+        println!("overwrite");
         todo!()
     }
 
@@ -396,10 +444,12 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         marker: DirMarker,
         buffer: &mut [u8],
     ) -> winfsp::Result<u32> {
+
+        println!("read_directory");
         
         let fh = context.ok_or(FspError::IO(ErrorKind::InvalidInput))?;
 
-        let dir_entry = match self.fh_to_entry.borrow().get(&fh) {
+        let dir_entry = match self.fh_to_entry.lock().expect("Mutex poisoned").get(&fh) {
             Some(entry) => entry.clone(),
             None => return Err(FspError::IO(ErrorKind::NotFound)),
         };
@@ -407,7 +457,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
             return Err(FspError::IO(ErrorKind::NotADirectory));
         }
 
-        let entries = match self.backend.borrow_mut().list_dir(dir_entry.ino){
+        let entries = match self.backend.lock().expect("Mutex poisoned").list_dir(dir_entry.ino){
             Ok(e) => e,
             Err(err) => return Err(map_error(&err)),
         };
@@ -498,6 +548,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     /// Read from a file. Return the number of bytes read,
     fn read(&self, context: &Self::FileContext, buffer: &mut [u8], offset: u64) -> winfsp::Result<u32> {
+        println!("read");
         todo!()
     }
 
@@ -511,6 +562,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         constrained_io: bool,
         file_info: &mut FileInfo,
     ) -> winfsp::Result<u32> {
+        println!("write");
         todo!()
     }
 
@@ -525,6 +577,23 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         file_name: &U16CStr,
         out_dir_info: &mut DirInfo,
     ) -> winfsp::Result<()> {
+        println!("get_dir_info_by_name");
         todo!()
     }
+
+    // SI POTREBBE ELIMINARE, chiamata solo in certe situazioni; DA RICONTROLLARE
+    fn get_volume_info(&self, out_volume_info: &mut VolumeInfo) -> winfsp::Result<()> {
+        println!("get_volume_info");
+        
+        // Imposta informazioni di base del volume
+        out_volume_info.total_size = 1024 * 1024 * 1024 * 100; // 100GB fittizi
+        out_volume_info.free_size = 1024 * 1024 * 1024 * 50;   // 50GB liberi fittizi
+        
+        // Set volume label
+        let volume_label = "Remote-FS\0";
+        out_volume_info.set_volume_label(volume_label);
+        
+        Ok(())
+    }
+
 }

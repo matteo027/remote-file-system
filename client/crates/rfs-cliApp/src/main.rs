@@ -46,6 +46,9 @@ struct Cli {
 
 fn main() {
 
+    // su windows settare:
+    // $env:PATH += ";C:\Program Files (x86)\WinFsp\bin"
+
     let cli = Cli::parse();
 
     // authentication
