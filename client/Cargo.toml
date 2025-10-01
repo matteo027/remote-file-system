@@ -11,6 +11,12 @@ members = [
 
 default-members = [
   "crates/rfs-api",
-  "crates/rfs-cliApp",
+  "crates/rfs-cliApp", 
   "crates/rfs-models",
 ]
+
+# Platform-specific member groups per facilità di build
+[workspace.metadata.cross-platform]
+linux-only = ["rfs-cache", "rfs-fuse"] 
+windows-only = ["rfs-winfsp"]
+common = ["rfs-api", "rfs-cliApp", "rfs-models"]

@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 rfs-models = { version = "0.1.0", path = "../rfs-models" }
-tokio = "1.47.1"
-tokio-stream = "0.1.17"
+tokio = { version = "1.47.1", default-features = false, features = ["rt-multi-thread", "macros"] }
+tokio-stream = { version = "0.1.17", default-features = false }
 libc = "0.2.174"
 
 [target.'cfg(unix)'.dependencies]
