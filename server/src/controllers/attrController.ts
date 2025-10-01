@@ -246,7 +246,7 @@ export class AttributeController{
         try {
             const pathObj = await pathRepo.findOne({ where: { path: dbPath }, relations: ['file', 'file.owner', 'file.group'] }) as Path | null;
             if (!pathObj || !pathObj.file) {
-                return res.status(500).json({ error: "EIO", message: dbPath + " not found in database" });
+                return res.status(404).json({ error: "EIO", message: dbPath + " not found in database" });
             }
             const file = pathObj.file;
 
