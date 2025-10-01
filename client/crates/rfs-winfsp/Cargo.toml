@@ -5,12 +5,12 @@ edition = "2024"
 
 [dependencies]
 rfs-models = { version = "0.1.0", path = "../rfs-models" }
-tokio = { version = "1.47.1", features = ["rt", "macros"] }
-tokio-stream = "0.1.17"
+tokio = { version = "1.47.1", default-features = false, features = ["rt-multi-thread", "macros"] }
+tokio-stream = { version = "0.1.17", default-features = false }
 filetime = "0.2.26"
 glob = "0.3.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winfsp = { version = "0.11.3+winfsp-2.0"}
+winfsp = "0.11.3"
 winfsp-sys = "0.2.2"
 winapi = { version = "0.3.9", features = ["winnt"] }

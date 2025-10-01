@@ -1,11 +1,12 @@
 use clap::Parser;
 use rfs_api::HttpBackend;
-use std::fs::{create_dir_all, File};
 use std::sync::{Arc, Mutex, Condvar};
 use tokio::runtime::Builder;
 use signal_hook::{consts::*};
 use std::thread;
 
+#[cfg(unix)]
+use std::fs::{create_dir_all, File};
 #[cfg(unix)]
 use daemonize::Daemonize;
 #[cfg(unix)]
@@ -62,9 +63,10 @@ fn main() {
     };
     
     // --- Logging + daemonize (solo Linux) ---
-    let mut file_speed: Option<File> = None;
+    
     #[cfg(target_os = "linux")]
     {
+        let mut file_speed: Option<File> = None;
         let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
         let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
         if cli.speed_testing {
@@ -98,12 +100,10 @@ fn main() {
     }
 
     #[cfg(target_os = "windows")]{
-        let fs = RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, file_speed);
-        let session = {
-            let mut host = FileSystemHost::new(VolumeParams::new(), fs).expect("Unable o create a FileSystemHost");
-            host.mount(&cli.mount_point).expect("Unable to mount the filesystem");
-            host.start().expect("Unable to start the filesystem host");
-        };
+        let fs = RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, None);
+        let mut host = FileSystemHost::new(VolumeParams::new(), fs).expect("Unable o create a FileSystemHost");
+        host.mount(&cli.mount_point).expect("Unable to mount the filesystem");
+        host.start().expect("Unable to start the filesystem host");
     }
 
     println!("Remote-FS mounted on {}", cli.mount_point);
@@ -111,12 +111,12 @@ fn main() {
     
     // signal handling
     let pair = Arc::new((Mutex::new(false), Condvar::new()));
-    let pair_clone = pair.clone();
 
     #[cfg(unix)]
     {
         thread::spawn(move || {
             let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT, SIGHUP]).expect("Unable to create signals to listen to");
+            let pair_clone = pair.clone();
             for signal in signals.forever() {
                 match signal {
                     SIGINT | SIGTERM | SIGQUIT | SIGHUP => {
