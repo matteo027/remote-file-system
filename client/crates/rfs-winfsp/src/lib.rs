@@ -1,4 +1,4 @@
-#![cfg(windows)]
+#![cfg(windows)] // questo file è compilato solo su Windows
 
 use glob::Pattern;
 use winfsp::filesystem::{DirBuffer, DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, ModificationDescriptor, OpenFileInfo, VolumeInfo, WideNameInfo};
