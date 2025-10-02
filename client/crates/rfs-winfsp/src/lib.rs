@@ -181,7 +181,6 @@ impl<B: RemoteBackend> RemoteFS<B> {
     fn get_parent_ino_and_fname<'a>(&self, path: &String) -> Result<(u64, String), FspError> {
 
         let path_obj = Path::new(&path);
-        println!("path obj: {:?}", path_obj);
         let parent_path = match path_obj.parent() {
             Some(p) => p.to_string_lossy().to_string(),
             None => "\\".to_string(), // root directory
@@ -197,12 +196,10 @@ impl<B: RemoteBackend> RemoteFS<B> {
             },
         };
 
-        println!("parent_path: {}", parent_path.as_str());
         let parent_ino = match self.lookup_ino.lock().expect("Mutex poisoned").get(&parent_path) {
             Some(&ino) => ino,
             None => return Err(FspError::IO(ErrorKind::NotFound))
         };
-        println!("({}, {})", parent_ino, f_name);
         Ok((parent_ino, f_name))
     }
 
@@ -276,16 +273,12 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         security_descriptor: Option<&mut [std::ffi::c_void]>,
         _reparse_point_resolver: impl FnOnce(&winfsp::U16CStr) -> Option<winfsp::filesystem::FileSecurity>, // symlink managed server-side
     ) -> winfsp::Result<winfsp::filesystem::FileSecurity> {
-        println!("get_security_by_name");
         let path = file_name.to_string_lossy();
-        println!("path: {}", path);
         let (parent_ino, f_name) = self.get_parent_ino_and_fname(&path)?;
-        println!("passo alla lookup: {} e '{}'", parent_ino, f_name);
         let entry: FileEntry = match self.backend.lock().expect("Mutex poisoned").lookup(parent_ino, &f_name) {
             Ok(e) => e,
             Err(err) => return Err(map_error(&err)),
         };
-        println!("file entry ritornato: {}", entry.ino);
 
         self.lookup_ino.lock().expect("Mutex poisoned").insert(path, entry.ino);
         
