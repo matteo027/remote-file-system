@@ -154,13 +154,14 @@ pub struct RemoteFS<B: RemoteBackend> {
     rt: Arc<Runtime>, // runtime per eseguire le operazioni asincrone
 
     // inode/path management
-    lookup_ino: Mutex<HashMap<String, u64>>, //tiene riferimento al numero di riferimenti di naming per uno specifico inode, per gestire il caso di lookup multipli
+    lookup_ino: Mutex<HashMap<String, u64>>,
 
     // file handle management
     next_fh: AtomicU64, // file handle da allocare
     fh_to_entry: Mutex<HashMap<u64, FileEntry>>,
     read_file_handles: Mutex<HashMap<u64, ReadMode>>, // mappa file handle, per gestire read in streaming continuo su file già aperti
     write_buffers: Mutex<HashMap<u64, BTreeMap<u64, Vec<u8>>>>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
+    files_to_delete: Mutex<Vec<u64>>, // fh (set by set_delete, used by cleanup)
 
     // opzioni di testing
     speed_testing: bool,
@@ -177,6 +178,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
             fh_to_entry: Mutex::new(HashMap::new()),
             read_file_handles: Mutex::new(HashMap::new()),
             write_buffers: Mutex::new(HashMap::new()),
+            files_to_delete: Mutex::new(Vec::<u64>::new()),
             speed_testing,
             speed_file: Mutex::new(speed_file),
         }
@@ -265,6 +267,24 @@ impl<B: RemoteBackend> RemoteFS<B> {
         }
         buffer.clear();
         Ok(())
+    }
+
+    fn find_parent_and_name(&self, ino: u64) -> Result<(u64, String), FspError> {
+ 
+        let lookup_cache = self.lookup_ino.lock().expect("Mutex poisoned");
+        
+        let path = lookup_cache.iter()
+            .find(|(_, cached_ino)| **cached_ino == ino)
+            .map(|(path, _)| path.clone());
+        
+        drop(lookup_cache);
+        
+        let path = match path {
+            Some(p) => p,
+            None => return Err(FspError::IO(ErrorKind::NotFound)),
+        };
+        
+        self.get_parent_ino_and_fname(&path)
     }
 }
 
@@ -420,6 +440,51 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         
         // cleaning the file buffer(s)
         self.write_buffers.lock().expect("Mutex poisoned").remove(&fh);
+
+        // removing the file
+        let mut files_to_delete = self.files_to_delete.lock().expect("Mutex poisoned");
+        if let Some(pos) = files_to_delete.iter().position(|&x| x == fh) {
+                files_to_delete.remove(pos);
+                drop(files_to_delete);
+                
+                let mut files_to_delete = self.files_to_delete.lock().expect("Mutex poisoned");
+        if let Some(pos) = files_to_delete.iter().position(|&x| x == fh) {
+            files_to_delete.remove(pos);
+            drop(files_to_delete); // Release the lock
+            
+            if let Some(entry) = self.fh_to_entry.lock().expect("Mutex poisoned").get(&fh) {
+                // ✅ Get parent_ino and filename from the file path
+                let (parent_ino, filename) = match self.find_parent_and_name(entry.ino) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        println!("Failed to find parent for deletion: {:?}", e);
+                        return;
+                    }
+                };
+                
+                match entry.kind {
+                    EntryType::Directory => {
+                        if let Err(e) = self.backend.lock().expect("Mutex poisoned").delete_dir(parent_ino, &filename) {
+                            println!("Failed to delete directory: {}", e);
+                        } else {
+                            println!("Directory deleted successfully");
+                        }
+                    },
+                    _ => { // File or Symlink
+                        if let Err(e) = self.backend.lock().expect("Mutex poisoned").delete_file(parent_ino, &filename) {
+                            println!("Failed to delete file: {}", e);
+                        } else {
+                            println!("File deleted successfully");
+                        }
+                    }
+                }
+                
+                // ✅ Remove from path cache
+                let mut lookup_cache = self.lookup_ino.lock().expect("Mutex poisoned");
+                lookup_cache.retain(|_, &mut ino| ino != entry.ino);
+            }
+        }
+        }
         
     }
 
@@ -625,10 +690,19 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     fn set_delete(
         &self,
         context: &Self::FileContext,
-        file_name: &U16CStr,
+        _file_name: &U16CStr,
         delete_file: bool,
     ) -> winfsp::Result<()> {
-        todo!()
+
+        let fh = *context;
+
+        if delete_file {
+            self.files_to_delete.lock().expect("Mutex poisoned").push(fh);
+        } else {
+            self.files_to_delete.lock().expect("Mutex poisoned").retain(|&x| x != fh);
+        }
+
+        Ok(())
     }
 
     /// Set the file or allocation size.
