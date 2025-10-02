@@ -83,7 +83,7 @@ fn system_time_to_filetime(time: SystemTime) -> u64 {
 fn entry_to_file_security(entry: &FileEntry, security_descriptor: Option<&mut [std::ffi::c_void]>) -> FileSecurity {
     FileSecurity {
         reparse: entry.kind == EntryType::Symlink,
-        sz_security_descriptor: security_descriptor.map(|sd| sd.len() as u64).unwrap_or(0), // defaul Windows security descriptor
+        sz_security_descriptor: 0,
         attributes: match entry.kind {
             EntryType::Directory => FILE_ATTRIBUTE_DIRECTORY,
             EntryType::File => FILE_ATTRIBUTE_ARCHIVE,
@@ -179,27 +179,30 @@ impl<B: RemoteBackend> RemoteFS<B> {
     }
 
     fn get_parent_ino_and_fname<'a>(&self, path: &String) -> Result<(u64, String), FspError> {
+
         let path_obj = Path::new(&path);
+        println!("path obj: {:?}", path_obj);
         let parent_path = match path_obj.parent() {
             Some(p) => p.to_string_lossy().to_string(),
-            None => "/".to_string(), // root directory
+            None => "\\".to_string(), // root directory
         };
         let f_name = match path_obj.file_name() {
             Some(name) => name.to_string_lossy().to_string(),
-            None => return Err(FspError::IO(ErrorKind::InvalidInput)),
-        };
-        let mut lookup_ino_lock = self.lookup_ino.lock().expect("Mutex poisoned");
-        let parent_ino = match lookup_ino_lock.get(&parent_path) {
-            Some(&ino) => ino,
             None => match parent_path.as_str() {
-                "/" => {
-                    lookup_ino_lock.insert(String::from("/"), 1u64);
-                    1u64
+                "\\" => {
+                    self.lookup_ino.lock().expect("Mutex poisoned").insert(String::from("\\"), 1u64);
+                    return Ok((1u64, String::from("")));
                 },
-                _ => return Err(FspError::IO(ErrorKind::NotFound))
-            }
+                _ => return Err(FspError::IO(ErrorKind::InvalidInput))
+            },
         };
-        drop(lookup_ino_lock);
+
+        println!("parent_path: {}", parent_path.as_str());
+        let parent_ino = match self.lookup_ino.lock().expect("Mutex poisoned").get(&parent_path) {
+            Some(&ino) => ino,
+            None => return Err(FspError::IO(ErrorKind::NotFound))
+        };
+        println!("({}, {})", parent_ino, f_name);
         Ok((parent_ino, f_name))
     }
 
@@ -209,7 +212,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
         let mut last_offset = 0u64;
         let mut prev_block_size = 0u64;
 
-        let ino = match self.fh_to_entry.lock().expect("mutex poisoned").get(&fh) {
+        let ino = match self.fh_to_entry.lock().expect("Mutex poisoned").get(&fh) {
             Some(e) => e.ino,
             None => return Err(BackendError::NotFound(String::from("File handle associated to no ino"))),
         };
@@ -275,12 +278,14 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     ) -> winfsp::Result<winfsp::filesystem::FileSecurity> {
         println!("get_security_by_name");
         let path = file_name.to_string_lossy();
+        println!("path: {}", path);
         let (parent_ino, f_name) = self.get_parent_ino_and_fname(&path)?;
-        
+        println!("passo alla lookup: {} e '{}'", parent_ino, f_name);
         let entry: FileEntry = match self.backend.lock().expect("Mutex poisoned").lookup(parent_ino, &f_name) {
             Ok(e) => e,
             Err(err) => return Err(map_error(&err)),
         };
+        println!("file entry ritornato: {}", entry.ino);
 
         self.lookup_ino.lock().expect("Mutex poisoned").insert(path, entry.ino);
         
@@ -452,14 +457,18 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     /// Read directory entries from a directory handle.
     fn read_directory(
-        &self,
-        context: &Self::FileContext,
-        pattern: Option<&U16CStr>,
-        marker: DirMarker,
-        buffer: &mut [u8],
-    ) -> winfsp::Result<u32> {
+            &self,
+            context: &Self::FileContext,
+            pattern: Option<&U16CStr>,
+            marker: DirMarker,
+            buffer: &mut [u8],
+        ) -> winfsp::Result<u32> {
 
         println!("read_directory");
+
+        if !marker.is_none() {
+            return Ok(0);
+        }
         
         let fh = context.ok_or(FspError::IO(ErrorKind::InvalidInput))?;
 
@@ -471,16 +480,12 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
             return Err(FspError::IO(ErrorKind::NotADirectory));
         }
 
-        let entries = match self.backend.lock().expect("Mutex poisoned").list_dir(dir_entry.ino){
-            Ok(e) => e,
-            Err(err) => return Err(map_error(&err)),
-        };
+        let entries = self.backend.lock().expect("Mutex poisoned").list_dir(dir_entry.ino).map_err(|e|{map_error(&e)})?;
 
-        let bytes_written = 0u32;
         let pattern_str = pattern.map(|p| p.to_string_lossy().to_string());
 
         let dir_buffer = DirBuffer::new();
-        let buffer_lock = dir_buffer.acquire(marker.is_none(), Some(entries.len() as u32))?;
+        let buffer_lock = dir_buffer.acquire(true, Some(entries.len() as u32))?;
 
         for entry in entries.iter() {
 
@@ -493,6 +498,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
                     Err(_) => return Err(FspError::IO(ErrorKind::InvalidInput)), // invalid pattern
                 }
             }
+
 
             let mut dir_info = DirInfo::<255>::new();
             dir_info.set_name(&entry.name)?;
