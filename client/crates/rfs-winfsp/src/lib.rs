@@ -685,7 +685,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         context: &Self::FileContext,
         file_name: &U16CStr,
         new_file_name: &U16CStr,
-        replace_if_exists: bool,
+        _replace_if_exists: bool,
     ) -> winfsp::Result<()> {
         println!("rename");
         
