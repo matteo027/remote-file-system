@@ -17,6 +17,38 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::runtime::Runtime;
 use tokio_stream::StreamExt;
+use std::ptr;
+use windows_permissions::{LocalBox, SecurityDescriptor};
+use windows_sys::Win32::Security::GetSecurityDescriptorLength;
+
+
+const SDDL_ALLOW_ALL: &str = "O:BA G:SY D:(A;;FA;;;WD)";
+
+fn sd_from_sddl(sddl: &str,buf_opt: Option<&mut [std::ffi::c_void]>) -> Result<u64, winfsp::FspError> {
+    // Parse SDDL in modo "safe" (gestione memoria automatica su LocalHeap)
+    let sd: LocalBox<SecurityDescriptor> = sddl
+        .parse()
+        .map_err(|_| winfsp::FspError::IO(ErrorKind::InvalidData))?;
+
+    // Puntatore raw al SECURITY_DESCRIPTOR sottostante
+    let psd = (&*sd) as *const SecurityDescriptor as *const std::ffi::c_void;
+
+    // Dimensione del SECURITY_DESCRIPTOR in byte
+    let len = unsafe { GetSecurityDescriptorLength(psd as *mut std::ffi::c_void) as usize };
+    if len == 0 {
+        return Err(winfsp::FspError::IO(ErrorKind::InvalidData));
+    }
+
+    // Copia opzionale nel buffer del chiamante
+    if let Some(dst) = buf_opt {
+        let n = len.min(dst.len());
+        unsafe {
+            ptr::copy_nonoverlapping(psd as *const u8, dst.as_ptr() as *mut u8, n);
+        }
+    }
+
+    Ok(len as u64)
+}
 
 const TTL_FILE: Duration = Duration::from_secs(7);
 const TTL_DIR: Duration = Duration::from_secs(3);
@@ -275,14 +307,23 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     ) -> winfsp::Result<winfsp::filesystem::FileSecurity> {
         let path = file_name.to_string_lossy();
         let (parent_ino, f_name) = self.get_parent_ino_and_fname(&path)?;
-        let entry: FileEntry = match self.backend.lock().expect("Mutex poisoned").lookup(parent_ino, &f_name) {
-            Ok(e) => e,
-            Err(err) => return Err(map_error(&err)),
-        };
-
+        let entry = self.backend.lock().expect("Mutex poisoned")
+            .lookup(parent_ino, &f_name).map_err(|e| map_error(&e))?;
         self.lookup_ino.lock().expect("Mutex poisoned").insert(path, entry.ino);
-        
-        Ok(entry_to_file_security(&entry, security_descriptor))
+
+        // SDDL "tutti full control" per test/dev:
+        // Owner=Administrators, Group=SYSTEM, DACL: Everyone (WD) Full Access (FA)
+        let needed = sd_from_sddl(SDDL_ALLOW_ALL, security_descriptor)?;
+
+        Ok(winfsp::filesystem::FileSecurity {
+            reparse: matches!(entry.kind, EntryType::Symlink),
+            sz_security_descriptor: needed, // **mai 0**
+            attributes: match entry.kind {
+                EntryType::Directory => FILE_ATTRIBUTE_DIRECTORY,
+                EntryType::File      => FILE_ATTRIBUTE_ARCHIVE,
+                EntryType::Symlink   => FILE_ATTRIBUTE_REPARSE_POINT,
+            },
+        })
     }
 
     fn open(
@@ -460,8 +501,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         context: &Self::FileContext,
         security_descriptor: Option<&mut [c_void]>,
     ) -> winfsp::Result<u64> {
-        println!("get_security");
-        todo!()
+        sd_from_sddl(SDDL_ALLOW_ALL, security_descriptor)
     }
 
     /// Set file or directory security descriptor.
