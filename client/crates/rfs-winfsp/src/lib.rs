@@ -265,7 +265,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
 }
 
 impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
-    type FileContext = Option<u64>; // file handle
+    type FileContext = u64; // file handle
 
     fn get_security_by_name(
         &self,
@@ -325,23 +325,17 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
             
         }
         
-        Ok(Some(fh))
+        Ok(fh)
     }
 
     fn close(&self, context: Self::FileContext) {
         println!("close");
+
+        let fh = context;
         
-        if let Some(fh) = context {
-            
-            if let Err(e) = self.flush_file(fh) {
-                map_error(&e); // prints the error
-            }
-            
-            // Rimuovi dalle strutture
-            self.fh_to_entry.lock().expect("Mutex poisoned").remove(&fh);
-            self.read_file_handles.lock().expect("Mutex poisoned").remove(&fh);
-            self.write_buffers.lock().expect("Mutex poisoned").remove(&fh);
-        }
+        self.fh_to_entry.lock().expect("Mutex poisoned").remove(&fh);
+        self.read_file_handles.lock().expect("Mutex poisoned").remove(&fh);
+        self.write_buffers.lock().expect("Mutex poisoned").remove(&fh);
 
     }
 
@@ -384,7 +378,15 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     /// Clean up a file.
     fn cleanup(&self, context: &Self::FileContext, file_name: Option<&U16CStr>, flags: u32) {
         println!("cleanup");
-        todo!()
+
+        let fh = context;
+        
+        if self.write_buffers.lock().expect("Mutex posioned").contains_key(fh) {
+            if let Err(e) = self.flush_file(*fh) {
+                map_error(&e);
+            }
+        }
+        
     }
 
     /// Flush a file or volume.
@@ -392,13 +394,52 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     /// If `context` is `None`, the request is to flush the entire volume.
     fn flush(&self, context: Option<&Self::FileContext>, file_info: &mut FileInfo) -> winfsp::Result<()> {
         println!("flush");
-        todo!()
+
+        match context {
+            Some(file_context) => {
+                let fh = *file_context;
+                
+                if !self.fh_to_entry.lock().expect("Mutex poisoned").contains_key(&fh) {
+                    return Err(FspError::IO(ErrorKind::NotFound));
+                }
+                
+                if self.write_buffers.lock().expect("Mutex poisoned").contains_key(&fh) {
+                    match self.flush_file(fh) {
+                        Ok(()) => {
+                            self.get_file_info(file_context, file_info)?;
+                        },
+                        Err(e) => {
+                            println!("Flush error: {}", e);
+                            return Err(map_error(&e));
+                        }
+                    }
+                } else {
+                    println!("No write buffers to flush for fh {}", fh);
+                    self.get_file_info(file_context, file_info)?;
+                }
+            },
+            None => {
+                let all_handles: Vec<u64> = {
+                    let write_buffers = self.write_buffers.lock().expect("Mutex poisoned");
+                    write_buffers.keys().cloned().collect()
+                };
+                
+                for fh in all_handles {
+                    if let Err(e) = self.flush_file(fh) {
+                        // flushes other files
+                    }
+                }
+                
+            }
+        }
+        
+        Ok(())
     }
 
     fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> winfsp::Result<()> {
         println!("get_file_info");
         
-        let fh = context.ok_or(FspError::IO(ErrorKind::InvalidInput))?;
+        let fh = *context;
         
         let entry = {
             let fh_entries = self.fh_to_entry.lock().map_err(|_| FspError::IO(ErrorKind::Other))?;
@@ -463,7 +504,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
             return Ok(0);
         }
         
-        let fh = context.ok_or(FspError::IO(ErrorKind::InvalidInput))?;
+        let fh = *context;
 
         let dir_entry = match self.fh_to_entry.lock().expect("Mutex poisoned").get(&fh) {
             Some(entry) => entry.clone(),
