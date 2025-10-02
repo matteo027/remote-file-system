@@ -114,8 +114,4 @@ pub trait RemoteBackend: Send + Sync {
     fn get_attr_if_modified_since(&mut self, ino: u64, _since: SystemTime) -> Result<Option<FileEntry>, BackendError> {
         Ok(Some(self.get_attr(ino)?))
     }
-
-    // WINDOWS specific api calls
-    /// Cerca un file o directory per path
-    fn lookup_by_path(&mut self, path:&str) -> Result<FileEntry, BackendError>;
 }

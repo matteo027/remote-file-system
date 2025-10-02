@@ -119,6 +119,7 @@ fn entry_to_file_info(file_info: &mut FileInfo, entry: &FileEntry) -> () {
 
 }
 
+
 struct StreamState{
     ino: u64,
     pos: u64,
@@ -175,6 +176,31 @@ impl<B: RemoteBackend> RemoteFS<B> {
             speed_testing,
             speed_file: Mutex::new(speed_file),
         }
+    }
+
+    fn get_parent_ino_and_fname<'a>(&self, path: &String) -> Result<(u64, String), FspError> {
+        let path_obj = Path::new(&path);
+        let parent_path = match path_obj.parent() {
+            Some(p) => p.to_string_lossy().to_string(),
+            None => "/".to_string(), // root directory
+        };
+        let f_name = match path_obj.file_name() {
+            Some(name) => name.to_string_lossy().to_string(),
+            None => return Err(FspError::IO(ErrorKind::InvalidInput)),
+        };
+        let mut lookup_ino_lock = self.lookup_ino.lock().expect("Mutex poisoned");
+        let parent_ino = match lookup_ino_lock.get(&parent_path) {
+            Some(&ino) => ino,
+            None => match parent_path.as_str() {
+                "/" => {
+                    lookup_ino_lock.insert(String::from("/"), 1u64);
+                    1u64
+                },
+                _ => return Err(FspError::IO(ErrorKind::NotFound))
+            }
+        };
+        drop(lookup_ino_lock);
+        Ok((parent_ino, f_name))
     }
 
     fn flush_file(&self, fh: u64) -> Result<(), BackendError> {
@@ -248,10 +274,10 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         _reparse_point_resolver: impl FnOnce(&winfsp::U16CStr) -> Option<winfsp::filesystem::FileSecurity>, // symlink managed server-side
     ) -> winfsp::Result<winfsp::filesystem::FileSecurity> {
         println!("get_security_by_name");
-        let path = file_name.to_string_lossy().replace('\\', &String::from('/'));
-        println!("path: {}", path);
+        let path = file_name.to_string_lossy();
+        let (parent_ino, f_name) = self.get_parent_ino_and_fname(&path)?;
         
-        let entry: FileEntry = match self.backend.lock().expect("Mutex poisoned").lookup_by_path(&path) {
+        let entry: FileEntry = match self.backend.lock().expect("Mutex poisoned").lookup(parent_ino, &f_name) {
             Ok(e) => e,
             Err(err) => return Err(map_error(&err)),
         };
@@ -337,19 +363,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         println!("create");
         
         let path = file_name.to_string_lossy();
-        let path_obj = Path::new(&path);
-        let parent_path = match path_obj.parent() {
-            Some(p) => p.to_string_lossy().to_string(),
-            None => "/".to_string(), // root directory
-        };
-        let f_name = match path_obj.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => return Err(FspError::IO(ErrorKind::InvalidInput)),
-        };
-        let parent_ino = match self.lookup_ino.lock().expect("Mutex poisoned").get(&parent_path) {
-            Some(&ino) => ino,
-            None => return Err(FspError::IO(ErrorKind::NotFound)),
-        };
+        let (parent_ino, f_name) = self.get_parent_ino_and_fname(&path)?;
 
         let entry = if (file_attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 {
                 match self.backend.lock().expect("Mutex poisoned").create_dir(parent_ino, &f_name) {
