@@ -139,13 +139,11 @@ export class AttributeController{
     // serve per ottenere l'ino del file figlio dato il nome e l'ino della cartella padre
     public lookup = async (req: Request, res: Response) => {
         const parentIno=parseIno(req.params.parentIno);
-        const name= req.params.name;
+        const name= req.query.name ? String(req.query.name) : '';
 
         if(!parentIno)
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
-        if (isBadName(name))
-            return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
-
+        
         try{
             const parentDir=await fileRepo.findOne({where:{ino:parentIno}, relations:['owner', 'group', 'paths']}) as File;
             if(!parentDir)
@@ -170,7 +168,7 @@ export class AttributeController{
             }
 
             const childFile = await fileRepo.findOne({
-                where: { ino: stats.ino.toString() },
+                where: { ino: childDbPath == '/' ? '1' : stats.ino.toString() },
                 relations: ["owner", "group", "paths"],
             }) as File;
             const childPathObj = await pathRepo.findOne({ where: { path: childDbPath }, relations: ["file"] }) as Path | null;
