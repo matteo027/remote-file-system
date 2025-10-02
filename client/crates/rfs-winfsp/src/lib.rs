@@ -603,7 +603,100 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     /// Read from a file. Return the number of bytes read,
     fn read(&self, context: &Self::FileContext, buffer: &mut [u8], offset: u64) -> winfsp::Result<u32> {
         println!("read");
-        todo!()
+        
+        if offset < 0 {
+            return Err(FspError::IO(ErrorKind::InvalidData));
+        }
+
+        let fh = *context;
+
+        let entry = {
+            let fh_entries = self.fh_to_entry.lock().map_err(|_| FspError::IO(ErrorKind::Other))?;
+            match fh_entries.get(&fh) {
+                Some(entry) => entry.clone(),
+                None => return Err(FspError::IO(ErrorKind::NotFound)),
+            }
+        };
+
+        if entry.kind == EntryType::Directory {
+            return Err(FspError::IO(ErrorKind::IsADirectory));
+        }
+
+        // Check bounds
+        if offset >= entry.size {
+            return Ok(0); // EOF
+        }
+
+        let read_size = std::cmp::min(buffer.len() as u64, entry.size - offset) as usize;
+        if read_size == 0 {
+            return Ok(0);
+        }
+
+        // Get the read mode for this file handle
+        let mut read_handles = self.read_file_handles.lock().map_err(|_| FspError::IO(ErrorKind::Other))?;
+        let read_mode = match read_handles.get_mut(&fh) {
+            Some(rm) => rm,
+            None => return Err(FspError::IO(ErrorKind::NotFound)),
+        };
+        
+        match read_mode {
+            ReadMode::LargeStream(state) => {
+                let need= buffer.len() as usize;
+                if offset as u64 != state.pos { 
+                    return Err(FspError::IO(ErrorKind::InvalidInput)); // Non-seekable
+                }
+
+                if state.stream.is_none() && !state.eof {
+                    match self.backend.lock().expect("Mutex poisoned").read_stream(entry.ino, state.pos) {
+                        Ok(stream) => {
+                            state.stream = Some(stream);
+                            state.buffer.clear(); // clean the buffer for the new stram
+                        }
+                        Err(e) => return Err(map_error(&e)),
+                    }
+                }
+
+                while state.buffer.len() < need && !state.eof {
+                    let Some(stream)=state.stream.as_mut() else {break};
+                    let next = self.rt.block_on(async { stream.next().await });
+                    match next {
+                        Some(Ok(bytes))=> {
+                            if !bytes.is_empty() {
+                                state.buffer.extend_from_slice(&bytes);
+                            }
+                        },
+                        Some(Err(e)) => return Err(map_error(&e)),
+                        None => { // EOF server side
+                            state.eof = true;
+                            break;
+                        }
+                    }
+                }
+
+                if state.buffer.is_empty() {
+                    return Ok(0); // EOF
+                }
+
+                let take = need.min(state.buffer.len());
+                let out:Vec<u8>  = state.buffer.drain(..take).collect();
+                state.pos = state.pos.saturating_add(take as u64);
+                
+                buffer[..take].copy_from_slice(&out);
+                Ok(take as u32)
+            }
+            ReadMode::SmallPages => {
+                // chunk reading
+                match self.backend.lock().expect("Mutex poisoned").read_chunk(entry.ino, offset as u64, read_size as u64) {
+                    Ok(data) => {
+                        let bytes_read = if data.len() < buffer.len() { data.len() } else { buffer.len() };
+                        buffer[..bytes_read].copy_from_slice(&data[..bytes_read]);
+                        Ok(bytes_read as u32)
+                    }
+                    Err(e) => Err(map_error(&e)),
+                }
+            },
+        }
+
     }
 
     /// Write to a file. Return the number of bytes written.
