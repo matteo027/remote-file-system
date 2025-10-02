@@ -18,7 +18,7 @@ export function setRoutes(app: Express) {
     router.get('/api/files/:ino/attributes', isLoggedIn, attrController.getattr);
     router.patch('/api/files/:ino/attributes', isLoggedIn, attrController.setattr);
 
-    router.get('/api/directories/:parentIno/entries/:name/lookup', isLoggedIn, attrController.lookup);    
+    router.get('/api/directories/:parentIno/entries/lookup', isLoggedIn, attrController.lookup);    
     router.get('/api/directories/:ino/entries', isLoggedIn, attrController.readdir);
 
     router.post('/api/directories/:parentIno/dirs/:name', isLoggedIn, fileController.mkdir);
