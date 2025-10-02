@@ -10,6 +10,7 @@ use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStr
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{c_void, OsStr};
 use std::fs::File;
+use std::hash::Hash;
 use std::io::ErrorKind;
 use std::path::{Path};
 use std::sync::atomic::AtomicU64;
@@ -161,7 +162,7 @@ pub struct RemoteFS<B: RemoteBackend> {
     fh_to_entry: Mutex<HashMap<u64, FileEntry>>,
     read_file_handles: Mutex<HashMap<u64, ReadMode>>, // mappa file handle, per gestire read in streaming continuo su file già aperti
     write_buffers: Mutex<HashMap<u64, BTreeMap<u64, Vec<u8>>>>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
-    files_to_delete: Mutex<Vec<u64>>, // fh (set by set_delete, used by cleanup)
+    files_to_delete: Mutex<HashMap<u64, String>>, // fh -> path (set by set_delete, used by cleanup)
 
     // opzioni di testing
     speed_testing: bool,
@@ -178,7 +179,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
             fh_to_entry: Mutex::new(HashMap::new()),
             read_file_handles: Mutex::new(HashMap::new()),
             write_buffers: Mutex::new(HashMap::new()),
-            files_to_delete: Mutex::new(Vec::<u64>::new()),
+            files_to_delete: Mutex::new(HashMap::new()),
             speed_testing,
             speed_file: Mutex::new(speed_file),
         }
@@ -269,23 +270,6 @@ impl<B: RemoteBackend> RemoteFS<B> {
         Ok(())
     }
 
-    fn find_parent_and_name(&self, ino: u64) -> Result<(u64, String), FspError> {
- 
-        let lookup_cache = self.lookup_ino.lock().expect("Mutex poisoned");
-        
-        let path = lookup_cache.iter()
-            .find(|(_, cached_ino)| **cached_ino == ino)
-            .map(|(path, _)| path.clone());
-        
-        drop(lookup_cache);
-        
-        let path = match path {
-            Some(p) => p,
-            None => return Err(FspError::IO(ErrorKind::NotFound)),
-        };
-        
-        self.get_parent_ino_and_fname(&path)
-    }
 }
 
 impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
@@ -442,19 +426,20 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         self.write_buffers.lock().expect("Mutex poisoned").remove(&fh);
 
         // removing the file
-        let mut files_to_delete = self.files_to_delete.lock().expect("Mutex poisoned");
-        if let Some(pos) = files_to_delete.iter().position(|&x| x == fh) {
-                files_to_delete.remove(pos);
-                drop(files_to_delete);
-                
+        let path_opt = {
+            let files_to_delete = self.files_to_delete.lock().expect("Mutex poisoned");
+            files_to_delete.get(&fh).cloned()
+        };
+
+        if let Some(path) = path_opt {
+            {
                 let mut files_to_delete = self.files_to_delete.lock().expect("Mutex poisoned");
-        if let Some(pos) = files_to_delete.iter().position(|&x| x == fh) {
-            files_to_delete.remove(pos);
-            drop(files_to_delete); // Release the lock
+                files_to_delete.remove(&fh);
+            }
             
             if let Some(entry) = self.fh_to_entry.lock().expect("Mutex poisoned").get(&fh) {
-                // ✅ Get parent_ino and filename from the file path
-                let (parent_ino, filename) = match self.find_parent_and_name(entry.ino) {
+
+                let (parent_ino, filename) = match self.get_parent_ino_and_fname(&path) {
                     Ok(result) => result,
                     Err(e) => {
                         println!("Failed to find parent for deletion: {:?}", e);
@@ -479,11 +464,9 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
                     }
                 }
                 
-                // ✅ Remove from path cache
                 let mut lookup_cache = self.lookup_ino.lock().expect("Mutex poisoned");
                 lookup_cache.retain(|_, &mut ino| ino != entry.ino);
             }
-        }
         }
         
     }
@@ -663,8 +646,49 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         new_file_name: &U16CStr,
         replace_if_exists: bool,
     ) -> winfsp::Result<()> {
-        todo!()
+        println!("rename");
+        
+        let fh = *context;
+        let old_path = file_name.to_string_lossy();
+        let new_path = new_file_name.to_string_lossy();
+
+        // ✅ Get current entry from file handle
+        let entry = match self.fh_to_entry.lock().expect("Mutex poisoned").get(&fh) {
+            Some(entry) => entry.clone(),
+            None => return Err(FspError::IO(ErrorKind::NotFound)),
+        };
+
+        // old file path (source)
+        let (old_parent_ino, old_filename) = match self.get_parent_ino_and_fname(&old_path) {
+            Ok(result) => result,
+            Err(e) => {
+                println!("Failed to find old parent for rename: {:?}", e);
+                return Err(e);
+            }
+        };
+
+        // new file path (destination)
+        let (new_parent_ino, new_filename) = match self.get_parent_ino_and_fname(&new_path) {
+            Ok(result) => result,
+            Err(e) => {
+                println!("Failed to parse new path '{}': {:?}", new_path, e);
+                return Err(e);
+            }
+        };
+
+        let new_entry = self.backend.lock().expect("Mutex poisoned").rename(old_parent_ino, &old_filename, new_parent_ino, &new_filename).map_err(|e|{map_error(&e)})?;
+
+        println!("Rename successful: new ino={}, new name='{}'", new_entry.ino, new_entry.name);
+        self.fh_to_entry.lock().expect("Mutex poisoned").insert(fh, new_entry.clone());
+        {
+            let mut lookup_cache = self.lookup_ino.lock().expect("Mutex poisoned");
+            lookup_cache.retain(|_, &mut ino| ino != entry.ino);
+            lookup_cache.insert(new_path.to_string(), new_entry.ino);
+        }
+
+        Ok(())
     }
+
 
     /// Set file or directory basic information.
     #[allow(clippy::too_many_arguments)]
@@ -690,16 +714,16 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     fn set_delete(
         &self,
         context: &Self::FileContext,
-        _file_name: &U16CStr,
+        file_name: &U16CStr,
         delete_file: bool,
     ) -> winfsp::Result<()> {
 
         let fh = *context;
 
         if delete_file {
-            self.files_to_delete.lock().expect("Mutex poisoned").push(fh);
+            self.files_to_delete.lock().expect("Mutex poisoned").insert(fh, file_name.to_string_lossy());
         } else {
-            self.files_to_delete.lock().expect("Mutex poisoned").retain(|&x| x != fh);
+            self.files_to_delete.lock().expect("Mutex poisoned").remove(&fh);
         }
 
         Ok(())
