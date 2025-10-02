@@ -10,6 +10,7 @@ use rfs_models::{FileEntry, RemoteBackend, SetAttrRequest, BackendError, ByteStr
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{c_void, OsStr};
 use std::fs::File;
+use std::hash::Hash;
 use std::io::ErrorKind;
 use std::path::{Path};
 use std::sync::atomic::AtomicU64;
@@ -133,8 +134,12 @@ fn entry_to_file_info(file_info: &mut FileInfo, entry: &FileEntry) -> () {
         EntryType::Symlink => FILE_ATTRIBUTE_REPARSE_POINT,
     };
     
-    file_info.file_size = entry.size as u64;
-    file_info.allocation_size = ((entry.size + 511) / 512) * 512;
+    file_info.file_size = entry.size;
+    file_info.allocation_size = if entry.kind == EntryType::Directory {
+        4096
+    } else {
+        entry.size
+    };
     file_info.creation_time = system_time_to_filetime(entry.btime);
     file_info.last_access_time = system_time_to_filetime(entry.atime);
     file_info.last_write_time = system_time_to_filetime(entry.mtime);
@@ -182,13 +187,14 @@ pub struct RemoteFS<B: RemoteBackend> {
     rt: Arc<Runtime>, // runtime per eseguire le operazioni asincrone
 
     // inode/path management
-    lookup_ino: Mutex<HashMap<String, u64>>, //tiene riferimento al numero di riferimenti di naming per uno specifico inode, per gestire il caso di lookup multipli
+    lookup_ino: Mutex<HashMap<String, u64>>,
 
     // file handle management
     next_fh: AtomicU64, // file handle da allocare
     fh_to_entry: Mutex<HashMap<u64, FileEntry>>,
     read_file_handles: Mutex<HashMap<u64, ReadMode>>, // mappa file handle, per gestire read in streaming continuo su file già aperti
     write_buffers: Mutex<HashMap<u64, BTreeMap<u64, Vec<u8>>>>, // buffer di scrittura per ogni file aperto; il valore è la coppia (buffer, offset)
+    files_to_delete: Mutex<HashMap<u64, String>>, // fh -> path (set by set_delete, used by cleanup)
 
     // opzioni di testing
     speed_testing: bool,
@@ -205,6 +211,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
             fh_to_entry: Mutex::new(HashMap::new()),
             read_file_handles: Mutex::new(HashMap::new()),
             write_buffers: Mutex::new(HashMap::new()),
+            files_to_delete: Mutex::new(HashMap::new()),
             speed_testing,
             speed_file: Mutex::new(speed_file),
         }
@@ -294,6 +301,7 @@ impl<B: RemoteBackend> RemoteFS<B> {
         buffer.clear();
         Ok(())
     }
+
 }
 
 impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
@@ -303,16 +311,36 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         &self,
         file_name: &winfsp::U16CStr,
         security_descriptor: Option<&mut [std::ffi::c_void]>,
-        _reparse_point_resolver: impl FnOnce(&winfsp::U16CStr) -> Option<winfsp::filesystem::FileSecurity>, // symlink managed server-side
+        _reparse_point_resolver: impl FnOnce(&winfsp::U16CStr) -> Option<winfsp::filesystem::FileSecurity>,
     ) -> winfsp::Result<winfsp::filesystem::FileSecurity> {
         let path = file_name.to_string_lossy();
-        let (parent_ino, f_name) = self.get_parent_ino_and_fname(&path)?;
-        let entry = self.backend.lock().expect("Mutex poisoned")
-            .lookup(parent_ino, &f_name).map_err(|e| map_error(&e))?;
-        self.lookup_ino.lock().expect("Mutex poisoned").insert(path, entry.ino);
+        println!("get_security_by_name: path='{}'", path);
+        
+        let (parent_ino, f_name) = match self.get_parent_ino_and_fname(&path) {
+            Ok(result) => {
+                println!("  → parent_ino={}, f_name='{}'", result.0, result.1);
+                result
+            },
+            Err(e) => {
+                println!("  → get_parent_ino_and_fname FAILED: {:?}", e);
+                return Err(e);
+            }
+        };
+        
+        let entry: FileEntry = match self.backend.lock().expect("Mutex poisoned").lookup(parent_ino, &f_name) {
+            Ok(e) => {
+                println!("  → lookup SUCCESS: ino={}, name='{}', kind={:?}", e.ino, e.name, e.kind);
+                e
+            },
+            Err(err) => {
+                println!("  → lookup FAILED: {}", err);
+                return Err(map_error(&err));
+            }
+        };
 
-        // SDDL "tutti full control" per test/dev:
-        // Owner=Administrators, Group=SYSTEM, DACL: Everyone (WD) Full Access (FA)
+        self.lookup_ino.lock().expect("Mutex poisoned").insert(path.clone(), entry.ino);
+        println!("  → cached: '{}' → ino={}", path, entry.ino);
+    
         let needed = sd_from_sddl(SDDL_ALLOW_ALL, security_descriptor)?;
 
         Ok(winfsp::filesystem::FileSecurity {
@@ -333,44 +361,58 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         _granted_access: FILE_ACCESS_RIGHTS,
         file_info: &mut winfsp::filesystem::OpenFileInfo,
     ) -> winfsp::Result<Self::FileContext> {
-        println!("open");
         let path = file_name.to_string_lossy();
+        println!("open: path='{}'", path);
+    
         // lookup
         let ino = match self.lookup_ino.lock().expect("Mutex poisoned").get(&path) {
-            Some(&ino) => ino,
-            None => return Err(FspError::IO(ErrorKind::NotFound)),
+            Some(&ino) => {
+                println!("  → Found ino={} for path '{}'", ino, path);
+                ino
+            },
+            None => {
+                println!("  → Path '{}' not found in lookup cache", path);
+                return Err(FspError::IO(ErrorKind::NotFound));
+            }
         };
+        
         // getattr
         let entry = match self.backend.lock().expect("Mutex poisoned").get_attr(ino) {
-            Ok(e) => e,
-            Err(err) => return Err(map_error(&err)),
+            Ok(e) => {
+                println!("  → get_attr SUCCESS: ino={}, name='{}', size={}, kind={:?}", 
+                    e.ino, e.name, e.size, e.kind);
+                e
+            },
+            Err(err) => {
+                println!("  → get_attr FAILED for ino {}: {}", ino, err);
+                return Err(map_error(&err));
+            }
         };
 
-        
-        // updating OpenFileInfo with file's metadata
-        let file_info_data = file_info.as_mut();
-        entry_to_file_info(file_info_data, &entry);
+    // updating OpenFileInfo with file's metadata
+    let file_info_data = file_info.as_mut();
+    entry_to_file_info(file_info_data, &entry);
 
-        let fh = self.next_fh.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        
-        self.fh_to_entry.lock().expect("Mutex poisoned").insert(fh, entry.clone());
-        
-        if entry.kind != EntryType::Directory {
-            if entry.size > LARGE_FILE_SIZE {
-                self.read_file_handles.lock().expect("Mutex poisoned").insert(fh, ReadMode::LargeStream(StreamState::new(entry.ino)));
-            } else {
-                self.read_file_handles.lock().expect("Mutex poisoned").insert(fh, ReadMode::SmallPages);
-            }
-
-            self.write_buffers.lock().expect("Mutex poisoned").insert(fh, BTreeMap::new());
-            
+    let fh = self.next_fh.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    println!("  → Assigned file handle: {}", fh);
+    
+    self.fh_to_entry.lock().expect("Mutex poisoned").insert(fh, entry.clone());
+    
+    if entry.kind != EntryType::Directory {
+        if entry.size > LARGE_FILE_SIZE {
+            self.read_file_handles.lock().expect("Mutex poisoned").insert(fh, ReadMode::LargeStream(StreamState::new(entry.ino)));
+        } else {
+            self.read_file_handles.lock().expect("Mutex poisoned").insert(fh, ReadMode::SmallPages);
         }
-        
-        Ok(fh)
+        self.write_buffers.lock().expect("Mutex poisoned").insert(fh, BTreeMap::new());
+    }
+    
+    println!("  → open SUCCESS: fh={}", fh);
+    Ok(fh)
     }
 
     fn close(&self, context: Self::FileContext) {
-        println!("close");
+        println!("close: '{}'", self.fh_to_entry.lock().expect("Mutex poisoned").get(&context).unwrap().name);
 
         let fh = context;
         
@@ -418,13 +460,54 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     /// Clean up a file.
     fn cleanup(&self, context: &Self::FileContext, file_name: Option<&U16CStr>, flags: u32) {
-        println!("cleanup");
+        println!("cleanup: '{}'", self.fh_to_entry.lock().expect("Mutex poisoned").get(context).unwrap().name);
 
-        let fh = context;
+        let fh = *context;
         
-        if self.write_buffers.lock().expect("Mutex posioned").contains_key(fh) {
-            if let Err(e) = self.flush_file(*fh) {
-                map_error(&e);
+        // cleaning the file buffer(s)
+        self.write_buffers.lock().expect("Mutex poisoned").remove(&fh);
+
+        // removing the file
+        let path_opt = {
+            let files_to_delete = self.files_to_delete.lock().expect("Mutex poisoned");
+            files_to_delete.get(&fh).cloned()
+        };
+
+        if let Some(path) = path_opt {
+            {
+                let mut files_to_delete = self.files_to_delete.lock().expect("Mutex poisoned");
+                files_to_delete.remove(&fh);
+            }
+            
+            if let Some(entry) = self.fh_to_entry.lock().expect("Mutex poisoned").get(&fh) {
+
+                let (parent_ino, filename) = match self.get_parent_ino_and_fname(&path) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        println!("Failed to find parent for deletion: {:?}", e);
+                        return;
+                    }
+                };
+                
+                match entry.kind {
+                    EntryType::Directory => {
+                        if let Err(e) = self.backend.lock().expect("Mutex poisoned").delete_dir(parent_ino, &filename) {
+                            println!("Failed to delete directory: {}", e);
+                        } else {
+                            println!("Directory deleted successfully");
+                        }
+                    },
+                    _ => { // File or Symlink
+                        if let Err(e) = self.backend.lock().expect("Mutex poisoned").delete_file(parent_ino, &filename) {
+                            println!("Failed to delete file: {}", e);
+                        } else {
+                            println!("File deleted successfully");
+                        }
+                    }
+                }
+                
+                let mut lookup_cache = self.lookup_ino.lock().expect("Mutex poisoned");
+                lookup_cache.retain(|_, &mut ino| ino != entry.ino);
             }
         }
         
@@ -467,7 +550,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
                 
                 for fh in all_handles {
                     if let Err(e) = self.flush_file(fh) {
-                        // flushes other files
+                        println!("Warning: Failed to flush file handle {}: {}", fh, e);
                     }
                 }
                 
@@ -478,11 +561,11 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     }
 
     fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> winfsp::Result<()> {
-        println!("get_file_info");
+        println!("get_file_info: {}", self.fh_to_entry.lock().expect("Mutex poisoned").get(context).unwrap().name);
         
         let fh = *context;
-        
-        let entry = {
+
+        let cached_entry = {
             let fh_entries = self.fh_to_entry.lock().map_err(|_| FspError::IO(ErrorKind::Other))?;
             match fh_entries.get(&fh) {
                 Some(entry) => entry.clone(),
@@ -490,7 +573,15 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
             }
         };
         
-        entry_to_file_info(file_info, &entry);
+        let fresh_entry = match self.backend.lock().expect("Mutex poisoned").get_attr(cached_entry.ino) {
+            Ok(entry) => {
+                self.fh_to_entry.lock().expect("Mutex poisoned").insert(fh, entry.clone());
+                entry
+            },
+            Err(e) => return Err(map_error(&e)),
+        };
+        
+        entry_to_file_info(file_info, &fresh_entry);
         
         Ok(())
     }
@@ -538,7 +629,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
             buffer: &mut [u8],
         ) -> winfsp::Result<u32> {
 
-        println!("read_directory");
+        println!("read_directory: {}", self.fh_to_entry.lock().expect("Mutex poisoned").get(context).unwrap().name);
 
         if !marker.is_none() {
             return Ok(0);
@@ -596,8 +687,49 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         new_file_name: &U16CStr,
         replace_if_exists: bool,
     ) -> winfsp::Result<()> {
-        todo!()
+        println!("rename");
+        
+        let fh = *context;
+        let old_path = file_name.to_string_lossy();
+        let new_path = new_file_name.to_string_lossy();
+
+        // ✅ Get current entry from file handle
+        let entry = match self.fh_to_entry.lock().expect("Mutex poisoned").get(&fh) {
+            Some(entry) => entry.clone(),
+            None => return Err(FspError::IO(ErrorKind::NotFound)),
+        };
+
+        // old file path (source)
+        let (old_parent_ino, old_filename) = match self.get_parent_ino_and_fname(&old_path) {
+            Ok(result) => result,
+            Err(e) => {
+                println!("Failed to find old parent for rename: {:?}", e);
+                return Err(e);
+            }
+        };
+
+        // new file path (destination)
+        let (new_parent_ino, new_filename) = match self.get_parent_ino_and_fname(&new_path) {
+            Ok(result) => result,
+            Err(e) => {
+                println!("Failed to parse new path '{}': {:?}", new_path, e);
+                return Err(e);
+            }
+        };
+
+        let new_entry = self.backend.lock().expect("Mutex poisoned").rename(old_parent_ino, &old_filename, new_parent_ino, &new_filename).map_err(|e|{map_error(&e)})?;
+
+        println!("Rename successful: new ino={}, new name='{}'", new_entry.ino, new_entry.name);
+        self.fh_to_entry.lock().expect("Mutex poisoned").insert(fh, new_entry.clone());
+        {
+            let mut lookup_cache = self.lookup_ino.lock().expect("Mutex poisoned");
+            lookup_cache.retain(|_, &mut ino| ino != entry.ino);
+            lookup_cache.insert(new_path.to_string(), new_entry.ino);
+        }
+
+        Ok(())
     }
+
 
     /// Set file or directory basic information.
     #[allow(clippy::too_many_arguments)]
@@ -626,7 +758,16 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         file_name: &U16CStr,
         delete_file: bool,
     ) -> winfsp::Result<()> {
-        todo!()
+
+        let fh = *context;
+
+        if delete_file {
+            self.files_to_delete.lock().expect("Mutex poisoned").insert(fh, file_name.to_string_lossy());
+        } else {
+            self.files_to_delete.lock().expect("Mutex poisoned").remove(&fh);
+        }
+
+        Ok(())
     }
 
     /// Set the file or allocation size.
@@ -643,7 +784,95 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     /// Read from a file. Return the number of bytes read,
     fn read(&self, context: &Self::FileContext, buffer: &mut [u8], offset: u64) -> winfsp::Result<u32> {
         println!("read");
-        todo!()
+
+        let fh = *context;
+        let entry = {
+            let fh_entries = self.fh_to_entry.lock().map_err(|_| FspError::IO(ErrorKind::Other))?;
+            match fh_entries.get(&fh) {
+                Some(entry) => entry.clone(),
+                None => return Err(FspError::IO(ErrorKind::NotFound)),
+            }
+        };
+
+        if entry.kind == EntryType::Directory {
+            return Err(FspError::IO(ErrorKind::IsADirectory));
+        }
+
+        // Check bounds
+        if offset >= entry.size {
+            return Ok(0); // EOF
+        }
+
+        let read_size = std::cmp::min(buffer.len() as u64, entry.size - offset) as usize;
+        if read_size == 0 {
+            return Ok(0);
+        }
+
+        // Get the read mode for this file handle
+        let mut read_handles = self.read_file_handles.lock().map_err(|_| FspError::IO(ErrorKind::Other))?;
+        let read_mode = match read_handles.get_mut(&fh) {
+            Some(rm) => rm,
+            None => return Err(FspError::IO(ErrorKind::NotFound)),
+        };
+        
+        match read_mode {
+            ReadMode::LargeStream(state) => {
+                let need= buffer.len() as usize;
+                if offset as u64 != state.pos { 
+                    return Err(FspError::IO(ErrorKind::InvalidInput)); // Non-seekable
+                }
+
+                if state.stream.is_none() && !state.eof {
+                    match self.backend.lock().expect("Mutex poisoned").read_stream(entry.ino, state.pos) {
+                        Ok(stream) => {
+                            state.stream = Some(stream);
+                            state.buffer.clear(); // clean the buffer for the new stram
+                        }
+                        Err(e) => return Err(map_error(&e)),
+                    }
+                }
+
+                while state.buffer.len() < need && !state.eof {
+                    let Some(stream)=state.stream.as_mut() else {break};
+                    let next = self.rt.block_on(async { stream.next().await });
+                    match next {
+                        Some(Ok(bytes))=> {
+                            if !bytes.is_empty() {
+                                state.buffer.extend_from_slice(&bytes);
+                            }
+                        },
+                        Some(Err(e)) => return Err(map_error(&e)),
+                        None => { // EOF server side
+                            state.eof = true;
+                            break;
+                        }
+                    }
+                }
+
+                if state.buffer.is_empty() {
+                    return Ok(0); // EOF
+                }
+
+                let take = need.min(state.buffer.len());
+                let out:Vec<u8>  = state.buffer.drain(..take).collect();
+                state.pos = state.pos.saturating_add(take as u64);
+                
+                buffer[..take].copy_from_slice(&out);
+                Ok(take as u32)
+            }
+            ReadMode::SmallPages => {
+                // chunk reading
+                match self.backend.lock().expect("Mutex poisoned").read_chunk(entry.ino, offset as u64, read_size as u64) {
+                    Ok(data) => {
+                        let bytes_read = if data.len() < buffer.len() { data.len() } else { buffer.len() };
+                        buffer[..bytes_read].copy_from_slice(&data[..bytes_read]);
+                        Ok(bytes_read as u32)
+                    }
+                    Err(e) => Err(map_error(&e)),
+                }
+            },
+        }
+
     }
 
     /// Write to a file. Return the number of bytes written.
@@ -653,11 +882,52 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         buffer: &[u8],
         offset: u64,
         write_to_eof: bool,
-        constrained_io: bool,
+        _constrained_io: bool,
         file_info: &mut FileInfo,
     ) -> winfsp::Result<u32> {
         println!("write");
-        todo!()
+        
+        let fh = *context;
+        let mut entry = {
+            let fh_entries = self.fh_to_entry.lock().map_err(|_| FspError::IO(ErrorKind::Other))?;
+            match fh_entries.get(&fh) {
+                Some(entry) => entry.clone(),
+                None => return Err(FspError::IO(ErrorKind::NotFound)),
+            }
+        };
+
+        if entry.kind == EntryType::Directory {
+            return Err(FspError::IO(ErrorKind::IsADirectory));
+        }
+
+        if !self.write_buffers.lock().expect("Mutex poisoned").contains_key(&fh) {
+            return Err(FspError::IO(ErrorKind::NotFound)); // File handle not found in write buffers
+        }
+
+        let off = match write_to_eof {
+            true => entry.size, // write to end of file
+            false => offset
+        };
+        
+        // Scope to limit the mutable borrow of write_buffers
+        {
+            let mut write_buffers = self.write_buffers.lock().expect("Mutex poisoned");
+            let file_buffer = write_buffers.get_mut(&fh).ok_or(FspError::IO(ErrorKind::NotFound))?;
+            file_buffer.insert(off, buffer.to_vec());
+        }
+
+        let new_end_offset = off + buffer.len() as u64;
+        if new_end_offset > entry.size {
+            entry.size = new_end_offset;
+            entry.mtime = SystemTime::now();
+            
+            self.fh_to_entry.lock().expect("Mutex poisoned").insert(fh, entry.clone());
+        }
+
+        entry_to_file_info(file_info, &entry);
+
+        Ok(buffer.len() as u32)
+
     }
 
     /// Get directory information for a single file or directory within a parent directory.
