@@ -100,7 +100,7 @@ fn main() {
     }
 
     #[cfg(target_os = "windows")]{
-        let fs = RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, file_speed);
+        let fs = RemoteFS::new(http_backend, runtime.clone());
         let mut vp = VolumeParams::default();
         vp.case_preserved_names(true);
         vp.case_sensitive_search(true);
@@ -165,9 +165,6 @@ fn main() {
             eprintln!("\nSignal received (Windows)");
         });
     }
-
-    println!("Remote-FS mounted on {}", cli.mount_point);
-    println!("Remote address: {}", cli.remote_address);
 
     // waits for the signal
     let (lock, cvar) = &*pair;
