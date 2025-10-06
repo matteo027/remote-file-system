@@ -851,11 +851,13 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     }
 
-    // SI POTREBBE ELIMINARE, chiamata solo in certe situazioni; DA RICONTROLLARE
     fn get_volume_info(&self, out_volume_info: &mut VolumeInfo) -> winfsp::Result<()> {        
-        // Imposta informazioni di base del volume
-        out_volume_info.total_size = 1024 * 1024 * 1024 * 100; // 100GB fittizi
-        out_volume_info.free_size =  1024 * 1024 * 1024 * 50;   // 50GB fittizi
+        println!("get volume info");
+        let (total, available)= self.backend.lock().expect("Mutex poisoned").get_size().map_err(|e| {map_error(&e)})?;
+
+        println!("Total size {}, size {}", total, available);
+        out_volume_info.total_size = total;
+        out_volume_info.free_size =  available;
         
         // Set volume label
         let volume_label = "Remote-FS\0";

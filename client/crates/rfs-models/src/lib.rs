@@ -111,6 +111,8 @@ pub trait RemoteBackend: Send + Sync {
     fn symlink(&mut self, target_path: &str, link_parent_ino: u64, link_name: &str) -> Result<FileEntry, BackendError>;
     fn readlink(&mut self, ino: u64) -> Result<String, BackendError>;
 
+    fn get_size(&mut self) -> Result<(u64, u64), BackendError>;
+
     fn get_attr_if_modified_since(&mut self, ino: u64, _since: SystemTime) -> Result<Option<FileEntry>, BackendError> {
         Ok(Some(self.get_attr(ino)?))
     }

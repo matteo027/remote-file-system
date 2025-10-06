@@ -36,7 +36,7 @@ struct Cli {
     mount_point: String,
 
     /// Indirizzo del backend remoto
-    #[arg(short, long, default_value = "http://localhost:3000")]
+    #[arg(short, long, default_value = "http://fzucca.com:25570")]
     remote_address: String,
 
     /// Abilita la modalità speed testing (solo Linux e windows)
