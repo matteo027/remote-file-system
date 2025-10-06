@@ -5,6 +5,8 @@ import { Group } from './entities/Group';
 import path_manipulator from 'node:path';
 import { Stats,BigIntStats } from 'node:fs';
 import { Path } from './entities/Path';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 
 process.env.FS_ROOT = path_manipulator.join(__dirname, '..', 'file-system');
 export const fileRepo = AppDataSource.getRepository(File);
@@ -75,4 +77,20 @@ export function has_permissions(file: File, operation: number, user: User): bool
         return true;
 
     return false;
+}
+
+export async function getDirectorySize(dirPath: string): Promise<number> {
+    let totalSize = 0;
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+            totalSize += await getDirectorySize(fullPath); // Ricorsione
+        } else if (entry.isFile()) {
+            const stats = await fs.stat(fullPath);
+            totalSize += stats.size;
+        }
+    }
+    return totalSize;
 }
