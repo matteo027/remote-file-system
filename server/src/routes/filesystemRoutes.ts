@@ -36,5 +36,7 @@ export function setRoutes(app: Express) {
     router.post('/api/links/:targetIno', isLoggedIn, fileController.hardlink);
     router.post('/api/symlinks', isLoggedIn, fileController.symlink);
     router.get('/api/symlinks/:ino', isLoggedIn, fileController.readlink);
+
+    router.get('/api/size', isLoggedIn, attrController.fsSize);
     
 }
