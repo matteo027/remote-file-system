@@ -55,6 +55,12 @@ struct ReadLinkResponse {
     target: String,
 }
 
+#[derive(Deserialize,Debug)]
+struct SizeResponse {
+    total: u64,
+    available: u64,
+}
+
 pub struct HttpBackend {
     runtime: Arc<Runtime>, // from tokio, used to manage async calls
     base_url: Url,
@@ -407,6 +413,13 @@ impl RemoteBackend for HttpBackend {
 
         let rlr = self.request_response::<ReadLinkResponse, ()>(Method::GET, &endpoint, None)?;
         Ok(rlr.target)
+    }
+
+    fn get_size(&mut self) -> Result<(u64, u64), BackendError> {
+        let endpoint = format!("api/size");
+
+        let resp = self.request_response::<SizeResponse, ()>(Method::GET, &endpoint, None)?;
+        Ok((resp.total, resp.available))
     }
     
 }

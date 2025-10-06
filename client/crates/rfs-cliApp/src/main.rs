@@ -36,7 +36,7 @@ struct Cli {
     mount_point: String,
 
     /// Indirizzo del backend remoto
-    #[arg(short, long, default_value = "http://localhost:3000")]
+    #[arg(short, long, default_value = "http://fzucca.com:25570")]
     remote_address: String,
 
     /// Abilita la modalità speed testing (solo Linux e windows)
@@ -100,8 +100,13 @@ fn main() {
     }
 
     #[cfg(target_os = "windows")]{
-        let fs = RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, file_speed);
-        let mut host = FileSystemHost::new(VolumeParams::new(), fs).expect("Unable o create a FileSystemHost");
+        let fs = RemoteFS::new(http_backend, runtime.clone());
+        let mut vp = VolumeParams::default();
+        vp.case_preserved_names(true);
+        vp.case_sensitive_search(true);
+        vp.unicode_on_disk(true);
+        vp.reparse_points(true);
+        let mut host = FileSystemHost::new(vp, fs).expect("Unable o create a FileSystemHost");
         host.mount(&cli.mount_point).expect("Unable to mount the filesystem");
         host.start().expect("Unable to start the filesystem host");
     }
@@ -160,9 +165,6 @@ fn main() {
             eprintln!("\nSignal received (Windows)");
         });
     }
-
-    println!("Remote-FS mounted on {}", cli.mount_point);
-    println!("Remote address: {}", cli.remote_address);
 
     // waits for the signal
     let (lock, cvar) = &*pair;
