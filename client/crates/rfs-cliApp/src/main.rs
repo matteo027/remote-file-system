@@ -2,7 +2,6 @@ use clap::{Parser,ArgAction};
 use rfs_api::{HttpBackend,Credentials};
 use std::sync::Arc;
 use tokio::runtime::{Builder,Runtime};
-use std::thread;
 
 // ---------- Costanti OS-specifiche ----------
 #[cfg(target_os = "linux")]
@@ -46,8 +45,18 @@ fn main(){
         }
     };
 
-    #[cfg(target_os = "linux")] // only on linux
-    daemonize();
+    #[cfg(target_os = "linux")]{ // only on linux
+        let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
+        let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
+        let daemonize = Daemonize::new()
+            .pid_file("/tmp/remote-fs.pid") // saves PID
+            .stdout(stdout) // log stdout
+            .stderr(stderr) // log stderr
+            .working_directory("/")
+            .umask(0o027); // file's default permission
+
+        daemonize.start().expect("Error, daemonization failed");
+    }
 
 
     let runtime= Arc::new(Builder::new_multi_thread().enable_all().thread_name("rfs-runtime").build().expect("Unable to build a Runtime object"));
@@ -59,40 +68,6 @@ fn main(){
     run_windows(cli, http_backend, runtime);
 }
 
-#[cfg(target_os = "linux")]
-fn daemonize() -> () {
-    use std::fs::File;
-    use daemonize::Daemonize;
-    
-    let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
-    let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
-    
-    const PID_FILE :&str = "/tmp/remote-fs.pid";
-    if std::path::Path::new(PID_FILE).exists() {
-        if let Ok(pid_content) = std::fs::read_to_string(PID_FILE) {
-            if let Ok(pid) = pid_content.trim().parse::<u32>() {
-                let proc_path = format!("/proc/{}", pid);
-                if std::path::Path::new(&proc_path).exists() {
-                    eprintln!("Remote-FS daemon is already running with PID: {}", pid);
-                    eprintln!("To stop it, run: kill {}", pid);
-                    panic!("Daemon already running");
-                } else {
-                    let _ = std::fs::remove_file(PID_FILE);
-                }
-            }
-        }
-    }
-
-    let daemonize = Daemonize::new()
-        .pid_file(PID_FILE) // saves PID
-        .stdout(stdout) // log stdout
-        .stderr(stderr) // log stderr
-        .working_directory("/")
-        .umask(0o027); // file's default permission
-
-    daemonize.start().expect("Error, daemonization failed");
-}
-
 #[cfg(unix)]
 fn run_unix(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
     use fuser::{MountOption,Session};
@@ -100,6 +75,7 @@ fn run_unix(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
     use rfs_fuse::RemoteFS;
     use signal_hook::consts::*;
     use signal_hook::iterator::Signals;
+    use std::thread;
     //use rfs_cache::Cache;
 
     let file_speed= if cfg!(target_os = "linux") && cli.speed_testing {
@@ -143,40 +119,47 @@ fn run_unix(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
 }
 
 #[cfg(target_os = "windows")]
-fn run_windows(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
+fn run_windows(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>) {
     use rfs_winfsp::RemoteFS;
+    use std::sync::{Arc, Condvar, Mutex};
     use winfsp::host::{FileSystemHost, VolumeParams};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use signal_hook::flag;
 
     let fs = RemoteFS::new(http_backend, runtime.clone());
+
     let mut vp = VolumeParams::default();
     vp.case_preserved_names(true);
     vp.case_sensitive_search(true);
     vp.unicode_on_disk(true);
     vp.reparse_points(true);
 
-    let mut host = FileSystemHost::new(vp, fs).expect("Unable o create a FileSystemHost");
+    let mut host = FileSystemHost::new(vp, fs).expect("Unable to create a FileSystemHost");
+
     host.mount(&cli.mount_point).expect("Unable to mount the filesystem");
 
     println!("Remote-FS mounted on {}", cli.mount_point);
     println!("Remote address: {}", cli.remote_address);
+
+    // Coordinazione della terminazione senza busy-wait
+    let pair = Arc::new((Mutex::new(false), Condvar::new()));
+    let pair_for_handler = pair.clone();
+
+    ctrlc::set_handler(move || {
+        let (lock, cvar) = &*pair_for_handler;
+        let mut done = lock.lock().expect("lock poisoned");
+        *done = true;
+        cvar.notify_all(); // Sveglia il thread principale
+    }).expect("failed to install Ctrl+C handler");
+
     host.start().expect("Unable to start the filesystem host");
 
-    let term = Arc::new(AtomicBool::new(false));
-    flag::register(SIGINT, term.clone()).expect("register SIGINT");
-    flag::register(SIGTERM, term.clone()).expect("register SIGTERM");
+    let (lock, cvar) = &*pair;
+    let mut done = lock.lock().expect("lock poisoned");
+    while !*done {
+        done = cvar.wait(done).expect("condvar wait failed");
+    }
 
-    // Polling leggero dell’AtomicBool
-    while !term.load(Ordering::Relaxed) {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
     println!("\nSignal received, unmounting Remote-FS...");
-    if let Err(e) = host.stop() {
-        eprintln!("Error stopping Remote-FS: {}", e);
-    } 
-    if let Err(e) = host.unmount() {
-        eprintln!("Error unmounting Remote-FS: {}", e);
-    }
+    host.stop();
+    host.unmount();
     println!("Remote-FS unmounted correctly");
 }

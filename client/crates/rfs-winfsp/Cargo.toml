@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 rfs-models = { version = "0.1.0", path = "../rfs-models" }
-tokio = { version = "1.47.1", default-features = false, features = ["rt-multi-thread", "macros"] }
-tokio-stream = { version = "0.1.17", default-features = false }
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "macros"] }
+tokio-stream = "0.1.17"
 filetime = "0.2.26"
 glob = "0.3.3"
 
