@@ -273,7 +273,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     fn get_security_by_name(&self,file_name: &U16CStr,security_descriptor: Option<&mut [c_void]>,_reparse_point_resolver: impl FnOnce(&U16CStr) -> Option<FileSecurity>) -> FspResult<FileSecurity> {
         let path = file_name.to_string_lossy();
-        println!("get_security_by_name: path='{}'", path);
+        //println!("get_security_by_name: path='{}'", path);
 
         if path == "\\" {
             // root directory
@@ -307,7 +307,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     fn open(&self,file_name: &U16CStr,_create_options: u32,_granted_access: FILE_ACCESS_RIGHTS,file_info: &mut OpenFileInfo) -> FspResult<Self::FileContext> {
         let path = file_name.to_string_lossy();
-        println!("open: path='{}'", path);
+        //println!("open: path='{}'", path);
     
         // lookup
         let ino = *self.lookup_ino.lock().expect("Mutex poisoned").get(&path).ok_or(FspError::IO(ErrorKind::NotFound))?;
@@ -319,7 +319,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
         entry_to_file_info(file_info_data, &entry);
 
         let fh = self.next_fh.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        println!("  → Assigned file handle: {}", fh);
+        //println!("  → Assigned file handle: {}", fh);
         
         self.fh_to_entry.lock().expect("Mutex poisoned").insert(fh, entry.clone());
         
@@ -336,7 +336,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     }
 
     fn close(&self, context: Self::FileContext) {
-        println!("close");
+        //println!("close");
         let fh = context;
 
         let need_flush = { self.write_buffers.lock().expect("Mutex").contains_key(&fh) };
@@ -353,7 +353,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     fn create(&self,file_name: &U16CStr,create_options: u32,granted_access: FILE_ACCESS_RIGHTS,file_attributes: FILE_FLAGS_AND_ATTRIBUTES,_security_descriptor: Option<&[c_void]>,_allocation_size: u64,
         _extra_buffer: Option<&[u8]>,_extra_buffer_is_reparse_point: bool,file_info: &mut OpenFileInfo) -> FspResult<Self::FileContext> {
-        println!("create");
+        //println!("create");
         
         let path = file_name.to_string_lossy();
         let (parent_ino, f_name) = self.get_parent_ino_and_fname(&path)?;
@@ -368,7 +368,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     /// Clean up a file.
     fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, flags: u32) {
-        println!("cleanup: '{}'", self.fh_to_entry.lock().expect("Mutex poisoned").get(context).unwrap().name);
+        //println!("cleanup: '{}'", self.fh_to_entry.lock().expect("Mutex poisoned").get(context).unwrap().name);
         let fh = *context;
 
         // 1) Flush eventuali scritture buffered per questo handle
@@ -435,7 +435,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     ///
     /// If `context` is `None`, the request is to flush the entire volume.
     fn flush(&self, context: Option<&Self::FileContext>, file_info: &mut FileInfo) -> FspResult<()> {
-        println!("flush");
+        //println!("flush");
 
         match context {
             Some(file_context) => {
@@ -479,7 +479,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     }
 
     fn get_file_info(&self, context: &Self::FileContext, file_info: &mut FileInfo) -> FspResult<()> {
-        println!("get_file_info: {}", self.fh_to_entry.lock().expect("Mutex poisoned").get(context).unwrap().name);
+        //println!("get_file_info: {}", self.fh_to_entry.lock().expect("Mutex poisoned").get(context).unwrap().name);
         
         let fh = *context;
 
@@ -541,8 +541,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     /// Read directory entries from a directory handle.
     fn read_directory(&self,context: &Self::FileContext,pattern: Option<&U16CStr>,marker: DirMarker,buffer: &mut [u8]) -> FspResult<u32> {
-
-        println!("read_directory: {}", self.fh_to_entry.lock().expect("Mutex poisoned").get(context).unwrap().name);
+        //println!("read_directory: {}", self.fh_to_entry.lock().expect("Mutex poisoned").get(context).unwrap().name);
 
         if !marker.is_none() {
             return Ok(0);
@@ -594,7 +593,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     /// Renames a file or directory.
     fn rename(&self,context: &Self::FileContext,file_name: &U16CStr,new_file_name: &U16CStr,_replace_if_exists: bool) -> FspResult<()> {
-        println!("rename");
+        //println!("rename");
         
         let fh = *context;
         let old_path = file_name.to_string_lossy();
@@ -630,7 +629,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     /// set a flag to indicate that the file is to be deleted later by
     /// [`FileSystemContext::cleanup`](crate::filesystem::FileSystemContext::cleanup).
     fn set_delete(&self,context: &Self::FileContext,file_name: &U16CStr,delete_file: bool) -> FspResult<()> {
-        println!("set_delete: '{}'", file_name.to_string_lossy());
+        //println!("set_delete: '{}'", file_name.to_string_lossy());
         let fh = *context;
 
         // prendi l'entry dall'handle per sapere se è una dir
@@ -694,7 +693,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     /// Read from a file. Return the number of bytes read,
     fn read(&self, context: &Self::FileContext, buffer: &mut [u8], offset: u64) -> FspResult<u32> {
-        println!("read");
+        //println!("read");
 
         let fh = *context;
         let entry = {
@@ -788,7 +787,7 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
 
     /// Write to a file. Return the number of bytes written.
     fn write(&self,context: &Self::FileContext,buffer: &[u8],offset: u64,write_to_eof: bool,_constrained_io: bool,file_info: &mut FileInfo) -> FspResult<u32> {
-        println!("write");
+        //println!("write");
 
         let fh = *context;
         let mut entry = {
@@ -852,10 +851,8 @@ impl<B: RemoteBackend> FileSystemContext for RemoteFS<B> {
     }
 
     fn get_volume_info(&self, out_volume_info: &mut VolumeInfo) -> winfsp::Result<()> {        
-        println!("get volume info");
+        //println!("get volume info");
         let (total, available)= self.backend.lock().expect("Mutex poisoned").get_size().map_err(|e| {map_error(&e)})?;
-
-        println!("Total size {}, size {}", total, available);
         out_volume_info.total_size = total;
         out_volume_info.free_size =  available;
         
