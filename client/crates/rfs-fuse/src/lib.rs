@@ -143,10 +143,13 @@ impl<B: RemoteBackend> RemoteFS<B> {
         let mut prev_block_size = 0 as u64;
         // Collect the map's contents into a vector to avoid double mutable borrow
         let map_entries: Vec<(u64, Vec<u8>)> = {
-            let map: &mut BTreeMap<u64, Vec<u8>> = self.write_buffers.get_mut(&fh).unwrap();
-            let entries = map.iter().map(|(k, v)| (*k, v.clone())).collect();
-            map.clear();
-            entries
+            if let Some(map) = self.write_buffers.get_mut(&fh) {
+                let entries = map.iter().map(|(k, v)| (*k, v.clone())).collect();
+                map.clear();
+                entries
+            } else {
+                return Err(BackendError::Other("File handle not found".to_string()));
+            }
         };
         
         let mut buffer = Vec::<u8>::new();
@@ -566,9 +569,13 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             reply.error(EBADF); // File handle not found
         } else {
             // Scope to limit the mutable borrow of write_buffers
-            let buffer = self.write_buffers.get_mut(&fh).unwrap();
-            buffer.insert(off, data.to_vec());
-
+            if let Some(buffer)= self.write_buffers.get_mut(&fh) {
+                buffer.insert(off, data.to_vec());
+            }
+            else{
+                reply.error(EBADF);
+                return;
+            }
             reply.written(data.len() as u32);
         }
         
