@@ -1,33 +1,16 @@
-use clap::Parser;
-use rfs_api::HttpBackend;
-use std::sync::{Arc, Mutex, Condvar};
-use tokio::runtime::Builder;
-use signal_hook::{consts::*};
+use clap::{Parser,ArgAction};
+use rfs_api::{HttpBackend,Credentials};
+use std::sync::Arc;
+use tokio::runtime::{Builder,Runtime};
 use std::thread;
-use std::fs::File;
-use std::fs::create_dir_all;
-
-#[cfg(target_os = "linux")]
-use daemonize::Daemonize;
-#[cfg(unix)]
-use fuser::MountOption;
-#[cfg(unix)]
-use rfs_fuse::RemoteFS;
-//#[cfg(unix)]
-//se rfs_cache::Cache;
-#[cfg(unix)]
-use signal_hook::iterator::Signals;
-
-#[cfg(target_os = "windows")]
-use rfs_winfsp::RemoteFS;
-#[cfg(target_os = "windows")]
-use winfsp::host::{FileSystemHost, VolumeParams};
 
 // ---------- Costanti OS-specifiche ----------
+#[cfg(target_os = "linux")]
+const DEFAULT_MOUNT: &str = "/home/andrea/mnt/remote";
+#[cfg(target_os = "macos")]
+const DEFAULT_MOUNT: &str = "/Volumes/Remote-FS"; //?DA CONTROLLARE
 #[cfg(target_os = "windows")]
 const DEFAULT_MOUNT: &str = "X:";
-#[cfg(unix)]
-const DEFAULT_MOUNT: &str = "/home/matteo/mnt/remote";
 
 #[derive(Parser, Debug)]
 #[command(name = "Remote-FS", version = "0.1.0")]
@@ -37,23 +20,22 @@ struct Cli {
     mount_point: String,
 
     /// Indirizzo del backend remoto
-    #[arg(short, long, default_value = "http://fzucca.com:25570")]
+    #[arg(short, long, default_value = "http://localhost:3000")]  //"http://fzucca.com:25570"
     remote_address: String,
 
-    /// Abilita la modalità speed testing (solo Linux e windows)
-    #[arg(long, action = clap::ArgAction::SetTrue)]
+    /// Abilita la modalità speed testing (solo Linux)
+    #[arg(long, action = ArgAction::SetTrue)]
     speed_testing: bool,
 }
 
-fn main() {
+// su windows settare:
+// $env:PATH += ";C:\Program Files (x86)\WinFsp\bin"
 
-    // su windows settare:
-    // $env:PATH += ";C:\Program Files (x86)\WinFsp\bin"
-
+fn main(){
     let cli = Cli::parse();
 
-    // authentication
-    let (credentials, sessionid) = match rfs_api::Credentials::first_authentication(cli.remote_address.clone()) {
+    // first authentication
+    let (credentials, sessionid) = match Credentials::first_authentication(cli.remote_address.clone()) {
         Ok(creds) =>{
             println!("Authentication successful.");
             creds
@@ -63,117 +45,138 @@ fn main() {
             panic!("Cannot continue without credentials");
         }
     };
-    
-    // --- Logging + daemonize (solo Linux) ---
-    let mut file_speed: Option<File> = None;
-    
-    #[cfg(target_os = "linux")]
-    {
-        let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
-        let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
-        if cli.speed_testing {
-            println!("Speed testing mode enabled.");
-            file_speed = Some(File::create("/tmp/remote-fs.speed-test.out").expect("Failed to create speed test log file"));
-        }
 
-        let daemonize = Daemonize::new()
-            .pid_file("/tmp/remote-fs.pid") // saves PID
-            .stdout(stdout) // log stdout
-            .stderr(stderr) // log stderr
-            .working_directory("/")
-            .umask(0o027); // file's default permission
+    #[cfg(target_os = "linux")] // only on linux
+    daemonize();
 
-        daemonize.start().expect("Error, daemonization failed");
-    }
 
     let runtime= Arc::new(Builder::new_multi_thread().enable_all().thread_name("rfs-runtime").build().expect("Unable to build a Runtime object"));
+    let http_backend= HttpBackend::new(cli.remote_address.clone(), credentials, sessionid, runtime.clone()).expect("Cannot create the HTTP backend");
 
-    let http_backend= match HttpBackend::new(cli.remote_address.clone(), credentials, sessionid, runtime.clone()) {
-        Ok(be) => be,
-        Err(_) => panic!("Cannot create the HTTP backend"),
-    };
-    
     #[cfg(unix)]
-    let session = {
-        //let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
-        let fs = RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, file_speed);
-        let options = vec![MountOption::FSName("Remote-FS".to_string()), MountOption::RW];
-        create_dir_all(&cli.mount_point).expect("mount point does not exist and cannot be created");
-        fuser::spawn_mount2(fs, &cli.mount_point, &options).expect("failed to mount")
+    run_unix(cli, http_backend, runtime);
+    #[cfg(target_os = "windows")]
+    run_windows(cli, http_backend, runtime);
+}
+
+#[cfg(target_os = "linux")]
+fn daemonize() -> () {
+    use std::fs::File;
+    use daemonize::Daemonize;
+    
+    let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
+    let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
+    
+    const PID_FILE :&str = "/tmp/remote-fs.pid";
+    if std::path::Path::new(PID_FILE).exists() {
+        if let Ok(pid_content) = std::fs::read_to_string(PID_FILE) {
+            if let Ok(pid) = pid_content.trim().parse::<u32>() {
+                let proc_path = format!("/proc/{}", pid);
+                if std::path::Path::new(&proc_path).exists() {
+                    eprintln!("Remote-FS daemon is already running with PID: {}", pid);
+                    eprintln!("To stop it, run: kill {}", pid);
+                    panic!("Daemon already running");
+                } else {
+                    let _ = std::fs::remove_file(PID_FILE);
+                }
+            }
+        }
+    }
+
+    let daemonize = Daemonize::new()
+        .pid_file(PID_FILE) // saves PID
+        .stdout(stdout) // log stdout
+        .stderr(stderr) // log stderr
+        .working_directory("/")
+        .umask(0o027); // file's default permission
+
+    daemonize.start().expect("Error, daemonization failed");
+}
+
+#[cfg(unix)]
+fn run_unix(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
+    use fuser::{MountOption,Session};
+    use std::fs::File;
+    use rfs_fuse::RemoteFS;
+    use signal_hook::consts::*;
+    use signal_hook::iterator::Signals;
+    //use rfs_cache::Cache;
+
+    let file_speed= if cfg!(target_os = "linux") && cli.speed_testing {
+        println!("Speed testing mode enabled.");
+        Some(File::create("/tmp/remote-fs.speed-test.out").expect("Failed to create speed test log file"))
+    }else{
+        None
     };
 
-    #[cfg(target_os = "windows")]{
-        let fs = RemoteFS::new(http_backend, runtime.clone());
-        let mut vp = VolumeParams::default();
-        vp.case_preserved_names(true);
-        vp.case_sensitive_search(true);
-        vp.unicode_on_disk(true);
-        vp.reparse_points(true);
-        let mut host = FileSystemHost::new(vp, fs).expect("Unable o create a FileSystemHost");
-        host.mount(&cli.mount_point).expect("Unable to mount the filesystem");
-        host.start().expect("Unable to start the filesystem host");
-    }
+    //let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
+    let fs = RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, file_speed);
+    let options = vec![MountOption::FSName("Remote-FS".to_string()), MountOption::RW];
+    let mut session= Session::new(fs, &cli.mount_point, &options).expect("failed to mount");
 
     println!("Remote-FS mounted on {}", cli.mount_point);
     println!("Remote address: {}", cli.remote_address);
-    
-    // signal handling
-    let pair = Arc::new((Mutex::new(false), Condvar::new()));
-    let pair_clone = pair.clone();
 
-    #[cfg(unix)]
-    {
-        thread::spawn(move || {
-            let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT, SIGHUP]).expect("Unable to create signals to listen to");
-            for signal in signals.forever() {
-                match signal {
-                    SIGINT | SIGTERM | SIGQUIT | SIGHUP => {
-                        let (lock, cvar) = &*pair_clone;
-                        if let Ok(mut stop) = lock.lock() {
-                            *stop = true;
-                            cvar.notify_one();
-                        }
-                        println!("\nSignal received");
-                        break;
-                    },
-                    other => {
-                        eprintln!("Signal not handled: {}", other);
-                    }
-                }
-            }
-        });
+    let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT, SIGHUP]).expect("signals");
+    let mut unmounter = session.unmount_callable();
+    let sig_handle = signals.handle();
+    let sig_thread = thread::spawn(move || {
+        for sig in &mut signals {
+            println!("Segnale {} ricevuto: smonto…", sig);
+            let _ = unmounter.unmount();
+            break;
+        }
+    });
+
+    let run_res = session.run(); // blocca finché non viene smontato o c’è un errore
+
+    // Sveglia/chiudi il listener segnali e attendi che termini
+    if !sig_handle.is_closed() {
+        sig_handle.close();
     }
+    sig_thread.join().expect("error joining signal thread");
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        use signal_hook::flag;
-        let term = Arc::new(AtomicBool::new(false));
-
-        flag::register(SIGINT, term.clone()).expect("register SIGINT");
-        flag::register(SIGTERM, term.clone()).expect("register SIGTERM");
-
-        let term_clone = term.clone();
-        thread::spawn(move || {
-            // Polling leggero dell’AtomicBool
-            while !term_clone.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            let (lock, cvar) = &*pair_clone;
-            if let Ok(mut stop) = lock.lock() {
-                *stop = true;
-                cvar.notify_one();
-            }
-            eprintln!("\nSignal received (Windows)");
-        });
+    match run_res {
+        Ok(()) => println!("Remote-FS chiuso correttamente."),
+        Err(e) => eprintln!("Remote-FS terminato con errore: {e}")
     }
+}
 
-    // waits for the signal
-    let (lock, cvar) = &*pair;
-    let _stop = cvar.wait_while(lock.lock().unwrap(), |s|{!*s}).expect("Mutex poisoned");
-    #[cfg(unix)]
-    drop(session);
-    println!("Unmounting Remote-FS...");
+#[cfg(target_os = "windows")]
+fn run_windows(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
+    use rfs_winfsp::RemoteFS;
+    use winfsp::host::{FileSystemHost, VolumeParams};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use signal_hook::flag;
+
+    let fs = RemoteFS::new(http_backend, runtime.clone());
+    let mut vp = VolumeParams::default();
+    vp.case_preserved_names(true);
+    vp.case_sensitive_search(true);
+    vp.unicode_on_disk(true);
+    vp.reparse_points(true);
+
+    let mut host = FileSystemHost::new(vp, fs).expect("Unable o create a FileSystemHost");
+    host.mount(&cli.mount_point).expect("Unable to mount the filesystem");
+
+    println!("Remote-FS mounted on {}", cli.mount_point);
+    println!("Remote address: {}", cli.remote_address);
+    host.start().expect("Unable to start the filesystem host");
+
+    let term = Arc::new(AtomicBool::new(false));
+    flag::register(SIGINT, term.clone()).expect("register SIGINT");
+    flag::register(SIGTERM, term.clone()).expect("register SIGTERM");
+
+    // Polling leggero dell’AtomicBool
+    while !term.load(Ordering::Relaxed) {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    println!("\nSignal received, unmounting Remote-FS...");
+    if let Err(e) = host.stop() {
+        eprintln!("Error stopping Remote-FS: {}", e);
+    } 
+    if let Err(e) = host.unmount() {
+        eprintln!("Error unmounting Remote-FS: {}", e);
+    }
     println!("Remote-FS unmounted correctly");
 }
