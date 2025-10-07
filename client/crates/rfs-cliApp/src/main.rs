@@ -5,6 +5,7 @@ use tokio::runtime::Builder;
 use signal_hook::{consts::*};
 use std::thread;
 use std::fs::File;
+use std::fs::create_dir_all;
 
 #[cfg(target_os = "linux")]
 use daemonize::Daemonize;
@@ -92,12 +93,14 @@ fn main() {
         Err(_) => panic!("Cannot create the HTTP backend"),
     };
     
-    #[cfg(unix)]{
+    #[cfg(unix)]
+    let session = {
         //let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
         let fs = RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, file_speed);
         let options = vec![MountOption::FSName("Remote-FS".to_string()), MountOption::RW];
-        fuser::spawn_mount2(fs, &cli.mount_point, &options).expect("failed to mount");
-    }
+        create_dir_all(&cli.mount_point).expect("mount point does not exist and cannot be created");
+        fuser::spawn_mount2(fs, &cli.mount_point, &options).expect("failed to mount")
+    };
 
     #[cfg(target_os = "windows")]{
         let fs = RemoteFS::new(http_backend, runtime.clone());
@@ -169,6 +172,8 @@ fn main() {
     // waits for the signal
     let (lock, cvar) = &*pair;
     let _stop = cvar.wait_while(lock.lock().unwrap(), |s|{!*s}).expect("Mutex poisoned");
+    #[cfg(unix)]
+    drop(session);
     println!("Unmounting Remote-FS...");
     println!("Remote-FS unmounted correctly");
 }
