@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
-import { fileRepo,userRepo,toFsPath,has_permissions,parseIno,toEntryJson,isBadName,childPathOf, pathRepo} from '../utilities';
+import { fileRepo,userRepo,toFsPath,has_permissions,parseIno,toEntryJson,isBadName,childPathOf, pathRepo, getDirectorySize} from '../utilities';
 import { File } from '../entities/File';
 import { User } from '../entities/User';
 import * as fs from 'node:fs/promises';
 import { Path } from '../entities/Path';
 import path from 'node:path';
+import disk from 'diskusage';
 
 export class AttributeController{
     public readdir = async (req: Request, res: Response) => {
@@ -235,6 +236,19 @@ export class AttributeController{
             if (err.code === 'EACCES') 
                 return res.status(403).json({ error: 'Access denied' });
             return res.status(500).json({ error: 'Not possible to perform the operation', details: err });
+        }
+    }
+
+    public fsSize = async (req: Request, res: Response) => {
+
+        const root = path.resolve(process.env.FS_ROOT || './file-system');
+
+        try{
+            const { available, free, total } = await disk.check(root);
+            const occupied_size=await getDirectorySize(root);
+            return res.status(200).json({ total: occupied_size + free, available: free });
+        }catch(err:any){
+            return res.status(500).json({ error: "EIO", message: "Not possible to get the size of the filesystem", details: String(err?.message ?? err) });
         }
     }
 
