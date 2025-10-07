@@ -19,10 +19,10 @@ struct Cli {
     mount_point: String,
 
     /// Indirizzo del backend remoto
-    #[arg(short, long, default_value = "http://localhost:3000")]  //"http://fzucca.com:25570"
+    #[arg(short, long, default_value = "http://fzucca.com:25570")]  //"http://fzucca.com:25570"
     remote_address: String,
 
-    /// Abilita la modalità speed testing (solo Linux)
+    /// Abilita la modalità speed testing (solo Unix)
     #[arg(long, action = ArgAction::SetTrue)]
     speed_testing: bool,
 }
@@ -104,7 +104,7 @@ fn run_unix(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
     use signal_hook::consts::*;
     use signal_hook::iterator::Signals;
     use std::thread;
-    //use rfs_cache::Cache;
+    use rfs_cache::Cache;
 
     let file_speed= if cli.speed_testing {
         println!("Speed testing mode enabled.");
@@ -113,8 +113,8 @@ fn run_unix(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
         None
     };
 
-    //let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
-    let fs = RemoteFS::new(http_backend, runtime.clone(), cli.speed_testing, file_speed);
+    let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
+    let fs = RemoteFS::new(cache, runtime.clone(), cli.speed_testing, file_speed);
     let options = vec![MountOption::FSName("Remote-FS".to_string()), MountOption::RW];
     let mut session= Session::new(fs, &cli.mount_point, &options).expect("failed to mount");
 
