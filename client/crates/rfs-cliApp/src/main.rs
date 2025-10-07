@@ -34,32 +34,26 @@ fn main(){
     let cli = Cli::parse();
 
     // first authentication
-    let (credentials, sessionid) = match Credentials::first_authentication(cli.remote_address.clone()) {
+    let (credentials, sessionid) = match Credentials::first_authentication(&cli.remote_address) {
         Ok(creds) =>{
-            println!("Authentication successful.");
+            println!("Authentication successful. Welcome!");
             creds
         } ,
         Err(e) => {
-            eprintln!("Error reading credentials: {}", e);
-            panic!("Cannot continue without credentials");
+            eprintln!("Error authenticating: {}", e);
+            eprintln!("Exiting...");
+            return;
         }
     };
 
-    #[cfg(target_os = "linux")]{ // only on linux
-        use std::fs::File;
-        use daemonize::Daemonize;
-        let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
-        let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
-        let daemonize = Daemonize::new()
-            .pid_file("/tmp/remote-fs.pid") // saves PID
-            .stdout(stdout) // log stdout
-            .stderr(stderr) // log stderr
-            .working_directory("/")
-            .umask(0o027); // file's default permission
-
-        daemonize.start().expect("Error, daemonization failed");
+    #[cfg(target_os = "linux")]
+    {
+        if let Err(e) = demonize() {
+            eprintln!("{}", e);
+            eprintln!("Exiting...");
+            return;
+        }
     }
-
 
     let runtime= Arc::new(Builder::new_multi_thread().enable_all().thread_name("rfs-runtime").build().expect("Unable to build a Runtime object"));
     let http_backend= HttpBackend::new(cli.remote_address.clone(), credentials, sessionid, runtime.clone()).expect("Cannot create the HTTP backend");
@@ -68,6 +62,38 @@ fn main(){
     run_unix(cli, http_backend, runtime);
     #[cfg(target_os = "windows")]
     run_windows(cli, http_backend, runtime);
+}
+
+#[cfg(target_os = "linux")]
+fn demonize() -> Result<(), String>{
+    use std::fs::File;
+    use daemonize::Daemonize;
+
+    const PID_FILE :&str = "/tmp/remote-fs.pid";
+    if std::path::Path::new(PID_FILE).exists() {
+        if let Ok(pid_content) = std::fs::read_to_string(PID_FILE) {
+            if let Ok(pid) = pid_content.trim().parse::<u32>() {
+                let proc_path = format!("/proc/{}", pid);
+                if std::path::Path::new(&proc_path).exists() {
+                    return Err(format!("Remote-FS daemon is already running with PID: {}\nTo stop it, run: kill {}", pid, pid));
+                } else {
+                    let _ = std::fs::remove_file(PID_FILE);
+                }
+            }
+        }
+    }
+
+    let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
+    let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
+    let daemonize = Daemonize::new()
+        .pid_file(PID_FILE) // saves PID
+        .stdout(stdout) // log stdout
+        .stderr(stderr) // log stderr
+        .working_directory("/")
+        .umask(0o027); // file's default permission
+    println!("Starting Remote-FS daemon... Check /tmp/remote-fs.log and /tmp/remote-fs.err for output.");
+    daemonize.start().expect("Failed to daemonize the process");
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -80,7 +106,7 @@ fn run_unix(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
     use std::thread;
     //use rfs_cache::Cache;
 
-    let file_speed= if cfg!(target_os = "linux") && cli.speed_testing {
+    let file_speed= if cli.speed_testing {
         println!("Speed testing mode enabled.");
         Some(File::create("/tmp/remote-fs.speed-test.out").expect("Failed to create speed test log file"))
     }else{
@@ -94,13 +120,14 @@ fn run_unix(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
 
     println!("Remote-FS mounted on {}", cli.mount_point);
     println!("Remote address: {}", cli.remote_address);
+    println!("All set! Refer to /tmp/remote-fs.pid for killing the daemon.");
 
     let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT, SIGHUP]).expect("signals");
     let mut unmounter = session.unmount_callable();
     let sig_handle = signals.handle();
     let sig_thread = thread::spawn(move || {
         for sig in &mut signals {
-            println!("Segnale {} ricevuto: smonto…", sig);
+            println!("Signal {} received: unmounting...", sig);
             let _ = unmounter.unmount();
             break;
         }
@@ -115,8 +142,8 @@ fn run_unix(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
     sig_thread.join().expect("error joining signal thread");
 
     match run_res {
-        Ok(()) => println!("Remote-FS chiuso correttamente."),
-        Err(e) => eprintln!("Remote-FS terminato con errore: {e}")
+        Ok(()) => println!("Remote-FS closed successfully."),
+        Err(e) => eprintln!("Remote-FS terminated with error: {e}")
     }
 }
 
@@ -140,6 +167,7 @@ fn run_windows(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>) {
 
     println!("Remote-FS mounted on {}", cli.mount_point);
     println!("Remote address: {}", cli.remote_address);
+    println!("All set! Press Ctrl+C to unmount and exit.");
 
     // Coordinazione della terminazione senza busy-wait
     let pair = Arc::new((Mutex::new(false), Condvar::new()));

@@ -7,7 +7,7 @@ use rpassword::read_password;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::io::{stdin, stdout, Cursor, Write};
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::str::{ FromStr};
 use std::sync::Arc;
@@ -70,57 +70,68 @@ pub struct HttpBackend {
 
 impl Credentials {
 
-    pub fn first_authentication(address: String) -> Result<(Credentials, String), BackendError> {
-        let client = Client::new();
-        let base_url = Url::from_str(&address).expect("Invalid url");
+    pub fn first_authentication(address: &str) -> Result<(Credentials, String), String> {
+        use std::io::{stdin, stdout, Write};
+        use std::time::Duration;
 
-        // Spawn a new OS thread to handle the async login workflow
-        let handle = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Unable to generate tokio Runtime");
+        let base_url = Url::from_str(address).map_err(|e| format!("Invalid base URL: {e}"))?;
+        let login_url = base_url.join("api/login").expect("Invalid login URL");
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("Unable to build a Runtime object");
+        let client = Client::builder().timeout(Duration::from_secs(15)).build().expect("Failed to create HTTP client");
 
-            rt.block_on(async move {
-                loop {
-                    let mut username = String::new();
-                    let password;
-                    print!("username: ");  
-                    stdout().flush().unwrap();                  
-                    stdin().read_line(&mut username).expect("Failed to read the username");
-                    username = username.trim().to_string(); // removing the final endl
-                    print!("password: ");
-                    stdout().flush().unwrap();
-                    password = read_password().unwrap_or_else(|_| {
-                        eprintln!("\n[auth] Failed to read password");
-                        String::new()
-                    });
-                    let login_url = base_url.join("api/login").unwrap();
-                    let credentials = Self {
-                        username: username,
-                        password: password,
-                    };
-                    let resp_login = client
-                        .post(login_url.clone())
-                        .json(&credentials)
-                        .send()
-                        .await
-                        .map_err(|e| BackendError::Other(e.to_string()))?;
+        let mut username = String::new();
+        print!("username: ");
+        stdout().flush().ok();
+        stdin().read_line(&mut username).expect("Failed to read username");
+        let username = username.trim().to_owned();
 
-                    eprintln!("[auth] login status: {:?}", resp_login.status());
+        print!("password: ");
+        stdout().flush().ok();
+        let mut password = read_password().expect("Failed to read password");
+        println!();
 
-                    if resp_login.status() == StatusCode::OK {
-                        let sid = resp_login.cookies().find(|c| c.name() == "connect.sid").map(|c| c.value().to_string()).ok_or_else(|| BackendError::Other("Missing session cookie 'connect.sid'".into()))?;
-                        return Ok((credentials, sid));
-                    } 
+        const MAX_ATTEMPTS: u8 = 3;
+        let mut attempts: u8 = 0;
+        loop {
+            attempts += 1;
+
+            let resp = match rt.block_on(async {client.post(login_url.clone()).json(&serde_json::json!({ "username": username, "password": password })).send().await}) {
+                Ok(r) => r,
+                Err(e) => {
+                    // server non raggiungibile / timeout / DNS / connessione
+                    if e.is_timeout() || e.is_connect() || e.is_request() {
+                        eprintln!("[auth] Server not reachable: {e}, retrying...");
+                        if attempts >= MAX_ATTEMPTS {
+                            return Err(format!("Server not reachable after {MAX_ATTEMPTS} attempts"));
+                        }
+                        std::thread::sleep(Duration::from_secs(2));
+                        continue;
+                    }
+                    panic!("HTTP error: {e}");
                 }
-            })
-        });
+            };
 
-        // Wait for authentication thread to finish before proceeding
-        handle
-            .join()
-            .unwrap_or_else(|e| Err(BackendError::Other(format!("Thread join failure: {:?}", e))))
+            match resp.status() {
+                StatusCode::OK => {
+                    let sid = resp.cookies().find(|c| c.name() == "connect.sid").map(|c| c.value().to_string()).expect("No session cookie in response");
+                    let creds = Self { username, password };
+                    return Ok((creds, sid));
+                }
+                StatusCode::UNAUTHORIZED => {
+                    eprintln!("[auth] Credentials invalid.");
+                    if attempts >= MAX_ATTEMPTS {
+                        return Err("Too many invalid credentials (3 attempts)".to_string());
+                    }
+                    // riprompt solo password
+                    print!("password (retry): ");
+                    stdout().flush().ok();
+                    password = read_password().expect("Failed to read password");
+                    println!();
+                    continue;
+                }
+                other => return Err(format!("Login failed: HTTP {}", other).into())
+            }
+        }
     }
 }
 
