@@ -46,6 +46,8 @@ fn main(){
     };
 
     #[cfg(target_os = "linux")]{ // only on linux
+        use std::fs::File;
+        use daemonize::Daemonize;
         let stdout = File::create("/tmp/remote-fs.log").expect("Failed to create log file");
         let stderr = File::create("/tmp/remote-fs.err").expect("Failed to create error log file");
         let daemonize = Daemonize::new()
