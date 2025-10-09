@@ -7,19 +7,26 @@ import * as fs from 'node:fs/promises';
 import { Path } from '../entities/Path';
 import { permission } from 'node:process';
 
-export class FileController{
+export class FileController {
     public mkdir = async (req: Request, res: Response) => {
+        console.log("[mkdir] called with parentIno:", req.params.parentIno, "name:", req.params.name, "user:", (req.user as User).uid);
         const parentIno=parseIno(req.params.parentIno);
         const name = req.params.name;
 
-        if(!parentIno)
+        if(!parentIno) {
+            console.log("[mkdir] status 400: Parent inode missing");
             return res.status(400).json({ error: "EINVAL", message: "Parent inode missing" });
-        if (isBadName(name))
+        }
+        if (isBadName(name)) {
+            console.log("[mkdir] status 400: Invalid directory name");
             return res.status(400).json({ error: "EINVAL", message: "Invalid directory name" });
+        }
 
         const user = req.user as User |undefined;
-        if (!user)
+        if (!user) {
+            console.log("[mkdir] status 500: User not found");
             return res.status(500).json({ error: 'Not possible to retreive user data' });
+        }
         const userGroup = (await groupRepo.findOne({ where: { users: user } })) as Group | null;
         
         try{
@@ -29,13 +36,15 @@ export class FileController{
             })) as File | null;
 
             if (!parent) {
+                console.log("[mkdir] status 404: Parent not found");
                 return res.status(404).json({ error: "ENOENT", message: `Parent inode ${parentIno} not found` });
             }
             if (parent.type !== 1) {
+                console.log("[mkdir] status 400: Parent is not a directory");
                 return res.status(400).json({ error: "ENOTDIR", message: "Parent is not a directory" });
             }
-
             if(!has_permissions(parent,1,user)){
+                console.log("[mkdir] status 403: No permission");
                 return res.status(403).json({ error: "EACCES", message: `No permission to create in ${parentIno}` });
             }
 
@@ -60,19 +69,24 @@ export class FileController{
             } as Path;
             await pathRepo.save(childPathObject);
 
+            console.log("[mkdir] status 201: Directory created");
             return res.status(201).json(toEntryJson(directory, stats, childPathObject));
         }catch(err:any){
             if (err?.code === "EEXIST") {
+                console.log("[mkdir] status 409: Folder already exists");
                 return res.status(409).json({ error: "EEXIST", message: "Folder already exists" });
             }
             if (err?.code === "ENOENT") {
+                console.log("[mkdir] status 404: Parent path not found on filesystem");
                 return res.status(404).json({ error: "ENOENT", message: "Parent path not found on filesystem" });
             }
+            console.log("[mkdir] status 500:", err?.message ?? err);
             return res.status(500).json({ error: "EIO", message: "Not possible to create the folder", details: String(err?.message ?? err) });
         }
     }
 
     public rmdir = async (req: Request, res: Response) => {
+        console.log("[rmdir] called with parentIno:", req.params.parentIno, "name:", req.params.name, "user:", (req.user as User).uid);
         const parentIno=parseIno(req.params.parentIno);
         const name = req.params.name;
 
@@ -136,8 +150,10 @@ export class FileController{
             }
             else // should not happen, but just in case
                 return res.status(500).json({ error: "EIO", message: "Directory has multiple paths, manual cleanup required" });
+            console.log("[rmdir] status 200: Directory removed");
             return res.status(200).end();
         } catch (err: any) {
+            console.log("[rmdir] status 500:", err?.message ?? err);
             return res.status(500).json({
                 error: "EIO",
                 message: "Not possible to remove the directory",
@@ -147,6 +163,7 @@ export class FileController{
     }
 
     public create = async (req: Request, res: Response) => {
+        console.log("[create] called with parentIno:", req.params.parentIno, "name:", req.params.name, "user:", (req.user as User).uid);
         const parentIno=parseIno(req.params.parentIno);
         const name = req.params.name;
 
@@ -196,14 +213,18 @@ export class FileController{
             await fileRepo.save(file);
             await pathRepo.save(pathObj);
 
+            console.log("[create] status 201: File created");
             return res.status(201).json(toEntryJson(file, stats, pathObj));
         }catch(err:any){
             if (err?.code === "EEXIST") {
+                console.log("[create] status 409: File already exists");
                 return res.status(409).json({ error: "EEXIST", message: "File already exists" });
             }
             if (err?.code === "ENOENT") {
+                console.log("[create] status 404: Parent path not found on filesystem");
                 return res.status(404).json({ error: "ENOENT", message: "Parent path not found on filesystem" });
             }
+            console.log("[create] status 500:", err?.message ?? err);
             return res.status(500).json({
                 error: "EIO",
                 message: "Not possible to create the file",
@@ -213,6 +234,7 @@ export class FileController{
     }
 
     public unlink = async (req: Request, res: Response) => {
+        console.log("[unlink] called with parentIno:", req.params.parentIno, "name:", req.params.name, "user:", (req.user as User).uid);
         const parentIno=parseIno(req.params.parentIno);
         const name = req.params.name;
 
@@ -265,8 +287,10 @@ export class FileController{
             
             if (remainingPaths.length < 1)
                 await fileRepo.remove(child);
+            console.log("[unlink] status 200: File removed");
             return res.status(200).end();
         }catch(err:any){
+            console.log("[unlink] status 500:", err?.message ?? err);
             return res.status(500).json({
                 error: "EIO",
                 message: "Not possible to remove the file",
@@ -276,6 +300,7 @@ export class FileController{
     }
 
     public rename = async (req: Request, res: Response) => {
+        console.log("[rename] called with oldParentIno:", req.params.oldParentIno, "oldName:", req.params.oldName, "newParentIno:", req.body?.newParentIno, "newName:", req.body?.newName, "user:", (req.user as User).uid);
         const oldParentIno=parseIno(req.params.oldParentIno);
         const oldName=req.params.oldName;
 
@@ -337,13 +362,16 @@ export class FileController{
             await pathRepo.remove(pathObj);
             await pathRepo.save(newPathObj);
             const stats = await fs.lstat(fullNew,{bigint:true});
+            console.log("[rename] status 200: Entry renamed");
             return res.status(200).json(toEntryJson(entry, stats, newPathObj));
         }catch(err:any){
+            console.log("[rename] status 500:", err?.message ?? err);
             return res.status(500).json({ error: "EIO", message: "Not possible to rename", details: String(err?.message ?? err) });
         }
     }
 
     public hardlink = async (req: Request, res: Response) => {
+        console.log("[hardlink] called with targetIno:", req.params.targetIno, "linkParentIno:", req.body?.linkParentIno, "linkName:", req.body?.linkName, "user:", (req.user as User).uid);
         const targetIno = parseIno(req.params.targetIno);
         const dirLinkIno = parseIno(req.body.linkParentIno);
         const linkName = (req.body.linkName) as string | "";
@@ -404,16 +432,18 @@ export class FileController{
             } as Path;
             await pathRepo.save(linkPathObj);
 
+            console.log("[hardlink] status 200: Hard link created");
             return res.status(200).json(toEntryJson(target, stats, linkPathObj));
 
         }
         catch(err:any){
+            console.log("[hardlink] status 500:", err?.message ?? err);
             return res.status(500).json({ error: "EIO", message: "Not possible to create the hard link", details: String(err?.message ?? err) });
         }
-
     }
 
     public symlink = async (req: Request, res: Response) => {
+        console.log("[symlink] called with targetPath:", req.body?.targetPath, "linkParentIno:", req.body?.linkParentIno, "linkName:", req.body?.linkName, "user:", (req.user as User).uid);
         let targetPath = (req.body.targetPath) as string | "";
         const dirLinkIno = parseIno(req.body.linkParentIno);
         const linkName = (req.body.linkName) as string | "";
@@ -475,16 +505,19 @@ export class FileController{
             
             const linkStats = await fs.lstat(linkFsPath,{bigint:true});
 
+            console.log("[symlink] status 200: Symlink created");
             return res.status(200).json(toEntryJson(link, linkStats, linkPathObj));
 
         }
         catch(err:any){
+            console.log("[symlink] status 500:", err?.message ?? err);
             return res.status(500).json({ error: "EIO", message: "Not possible to create the symlink", details: String(err?.message ?? err) });
         }
 
     }
 
     public readlink = async (req: Request, res: Response) => {
+        console.log("[readlink] called with ino:", req.params.ino, "user:", (req.user as User).uid);
         const linkIno = parseIno(req.params.ino);
 
         if(!linkIno){
@@ -514,10 +547,12 @@ export class FileController{
             const target = await fs.readlink(linkFsPath);
             console.log("READLINK: Symlink target:", target);
 
+            console.log("[readlink] status 200: Symlink target returned");
             return res.status(200).json({ target });
 
         }
         catch(err:any){
+            console.log("[readlink] status 500:", err?.message ?? err);
             return res.status(500).json({ error: "EIO", message: "Not possible to read the symlink", details: String(err?.message ?? err) });
         }
 

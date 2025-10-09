@@ -17,32 +17,39 @@ export function normalizePath(input?: string | string[]): string {
 }
 
 
-export class ReadWriteController{
+export class ReadWriteController {
     public writeStream = async (req: Request, res: Response) => {
+        console.log("[writeStream] called with ino:", req.params.ino, "offset:", req.query.offset, "user:", (req.user as User)?.uid);
         const ino = parseIno(req.params.ino);
         const offset = Number(req.query.offset) || 0;
         const user: User = req.user as User;
 
-        if (!ino)
+        if (!ino) {
+            console.log("[writeStream] status 400: Inode missing");
             return res.status(400).json({ error: "EINVAL", message: "Inode missing" });
+        }
         if (user === null) {
+            console.log("[writeStream] status 500: User not found");
             return res.status(500).json({ error: 'Not possible to retreive user data' });
         }
         if (offset < 0) {
+            console.log("[writeStream] status 400: Invalid offset");
             return res.status(400).json({ error: 'Bad request: invalid offset' });
         }
 
         try {
-
             const file: File = await fileRepo.findOne({
                 where: { ino },
                 relations: ['owner', 'group', 'paths']
             }) as File;
-            if (!has_permissions(file, 1, req.user as User))
+            if (!has_permissions(file, 1, req.user as User)) {
+                console.log("[writeStream] status 403: No permission");
                 return res.status(403).json({ error: 'You have not the permission to write into the inode ' + ino });
+            }
 
-            const dbPath = file.paths[0].path; // every path is valid, so we can take the first one
+            const dbPath = file.paths[0].path;
             if (!dbPath) {
+                console.log("[writeStream] status 500: File path not found");
                 return res.status(500).json({ error: 'File path not found for inode ' + ino });
             }
             const fullFsPath = toFsPath(dbPath);
@@ -54,7 +61,7 @@ export class ReadWriteController{
 
             req.pipe(writeStream);
 
-            let responded = false; // serve perché potrebbe inviare un 500 error dopo un 200 finish
+            let responded = false;
             writeStream.on('finish', async () => {
                 if (!responded) {
                     responded = true;
@@ -129,6 +136,7 @@ export class ReadWriteController{
                     }
 
 
+                    console.log("[writeStream] status 200: Write finished, bytesWritten:", bytesWritten);
                     res.status(200).json({ bytes: bytesWritten });
                 }
             });
@@ -136,33 +144,41 @@ export class ReadWriteController{
             writeStream.on('error', (err) => {
                 if (!responded) {
                     responded = true;
-                    console.error('Stream error:', err);
+                    console.error('[writeStream] Stream error:', err);
                     res.status(500).json({ error: 'Write error' });
                 }
             });
         } catch (err: any) {
-            console.error('Error writing file:', err);
+            console.error('[writeStream] Error writing file:', err);
             if (err.code === 'ENOENT') {
+                console.log("[writeStream] status 404: File not found");
                 res.status(404).json({ error: 'File not found' });
             } else if (err.code === 'EACCES') {
+                console.log("[writeStream] status 403: Access denied");
                 res.status(403).json({ error: 'Access denied' });
             } else {
+                console.log("[writeStream] status 500: Internal error");
                 res.status(500).json({ error: 'Not possible to write into inode ' + ino, details: err });
             }
         }
     }
 
     public readStream = async (req: Request, res: Response) => {
+        console.log("[readStream] called with ino:", req.params.ino, "offset:", req.query.offset, "user:", (req.user as User)?.uid);
         const ino = parseIno(req.params.ino);
         const offset = Number(req.query.offset) || 0;
         const user: User = req.user as User;
 
-        if (!ino)
+        if (!ino) {
+            console.log("[readStream] status 400: Inode missing");
             return res.status(400).setHeader('Content-Type', 'application/octet-stream').end();
+        }
         if (offset < 0) {
+            console.log("[readStream] status 400: Invalid offset");
             return res.status(400).setHeader('Content-Type', 'application/octet-stream').end();
         }
         if (user === null) {
+            console.log("[readStream] status 500: User not found");
             return res.status(500).setHeader('Content-Type', 'application/octet-stream').end();
         }
 
@@ -172,19 +188,22 @@ export class ReadWriteController{
                 relations: ['owner', 'group', 'paths']
             }) as File;
             if (file === null) {
+                console.log("[readStream] status 404: File not found");
                 return res.status(404)
                     .setHeader('Content-Type', 'application/octet-stream')
                     .setHeader('Content-Length', '0')
                     .end();
             }
             if (!has_permissions(file, 0, req.user as User)) {
+                console.log("[readStream] status 403: No permission");
                 return res.status(403)
                     .setHeader('Content-Type', 'application/octet-stream')
                     .setHeader('Content-Length', '0')
                     .end();
             }
-            const dbPath = file.paths[0].path; // every path is valid, so we can take the first one
+            const dbPath = file.paths[0].path;
             if (!dbPath) {
+                console.log("[readStream] status 500: File path not found");
                 return res.status(500)
                     .setHeader('Content-Type', 'application/octet-stream')
                     .setHeader('Content-Length', '0')
@@ -197,6 +216,7 @@ export class ReadWriteController{
             readStream.on('error', (err) => {
                 console.error('[readStream] Stream error:', err);
                 if (!res.headersSent) {
+                    console.log("[readStream] status 500: Stream error");
                     res.status(500)
                         .setHeader('Content-Type', 'application/octet-stream')
                         .setHeader('Content-Length', '0')
@@ -207,8 +227,11 @@ export class ReadWriteController{
             });
 
             readStream.pipe(res);
+            console.log("[readStream] status 200: Streaming file");
 
         } catch (err: any) {
+            console.error('[readStream] Error:', err);
+            console.log("[readStream] status 500: Internal error");
             res.status(500)
                 .setHeader('Content-Type', 'application/octet-stream')
                 .setHeader('Content-Length', '0')
@@ -217,13 +240,17 @@ export class ReadWriteController{
     }
 
     public write = async (req: Request, res: Response) => {
+        console.log("[write] called with ino:", req.params.ino, "offset:", req.query.offset, "user:", (req.user as User)?.uid);
         const ino = parseIno(req.params.ino);
         const offset = Number(req.query.offset) || 0;
         const user: User = req.user as User;
 
-        if (!ino)
+        if (!ino) {
+            console.log("[write] status 400: Inode missing");
             return res.status(400).json({ error: "EINVAL", message: "Inode missing" });
+        }
         if (offset < 0) {
+            console.log("[write] status 400: Invalid offset");
             return res.status(400).json({ error: 'Bad request: invalid offset' });
         }
 
@@ -232,6 +259,7 @@ export class ReadWriteController{
         if (Buffer.isBuffer(req.body)) {
             buffer = req.body;
         } else {
+            console.log("[write] status 400: Invalid body");
             return res.status(400).json({ error: 'Bad request: invalid body' });    
         }
         try {
@@ -239,22 +267,28 @@ export class ReadWriteController{
                 where:{ino},
                 relations:["owner", "group", "paths"]
             }) as File;
-            if(!file)
+            if(!file) {
+                console.log("[write] status 404: File not found");
                 return res.status(404).json({ error: 'File not found' });
-            const fullFsPath = toFsPath(file.paths[0].path); // every path is valid, so we can take the first one
+            }
+            const fullFsPath = toFsPath(file.paths[0].path);
             if (!fullFsPath) {
+                console.log("[write] status 500: File path not found");
                 return res.status(500).json({ error: 'File path not found for inode ' + ino });
             }
-            if (!has_permissions(file, 1, user))
+            if (!has_permissions(file, 1, user)) {
+                console.log("[write] status 403: No permission");
                 return res.status(403).json({ error: 'You have not the permission to write the content the file ' + ino });
+            }
             const fh=await fsNode.open(fullFsPath, 'r+');
             try {
                 await fh.write(buffer, 0, buffer.length, offset);
             } finally {
                 await fh.close();
             }
-            const dbPath = file.paths[0].path; // every path is valid, so we can take the first one
+            const dbPath = file.paths[0].path;
             if (!dbPath) {
+                console.log("[write] status 500: File path not found");
                 return res.status(500).json({ error: 'File path not found for inode ' + ino });
             }
             if (dbPath === '/create-user.txt') {
@@ -325,31 +359,41 @@ export class ReadWriteController{
                 }
             }
 
+            console.log("[write] status 200: Write finished, bytes:", buffer.length);
             return res.status(200).json({ bytes: buffer.length });
 
         } catch (err: any) {
+            console.error('[write] Error:', err);
             if (err.code === 'ENOENT') {
-            return res.status(404).json({ error: 'File not found' });
+                console.log("[write] status 404: File not found");
+                return res.status(404).json({ error: 'File not found' });
             } else if (err.code === 'EACCES') {
-            return res.status(403).json({ error: 'Access denied' });
+                console.log("[write] status 403: Access denied");
+                return res.status(403).json({ error: 'Access denied' });
             } else if (err.code === 'EISDIR') {
-            return res.status(400).json({ error: 'Is a directory' });
+                console.log("[write] status 400: Is a directory");
+                return res.status(400).json({ error: 'Is a directory' });
             } else {
-            return res.status(500).json({ error: 'Not possible to write into the inode ' + ino, details: String(err) });
+                console.log("[write] status 500: Internal error");
+                return res.status(500).json({ error: 'Not possible to write into the inode ' + ino, details: String(err) });
             }
         }
     }
 
     public read = async (req: Request, res: Response) => {
+        console.log("[read] called with ino:", req.params.ino, "offset:", req.params.offset, "size:", req.query.size, "user:", (req.user as User)?.uid);
         const ino = parseIno(req.params.ino);
         const offset = Number(req.params.offset) || 0;
         const MAX_READ_SIZE = 1024 * 1024; // 1MB
         const size = Math.min(Number(req.query.size) || 4096, MAX_READ_SIZE);
         const user: User = req.user as User;
 
-        if (!ino)
+        if (!ino) {
+            console.log("[read] status 400: Inode missing");
             return res.status(400).json({ error: "EINVAL", message: "Inode missing" });
+        }
         if (offset < 0 || size <= 0) {
+            console.log("[read] status 400: Invalid offset or size");
             return res.status(400).json({ error: 'Bad request: invalid offset or size' });
         }
 
@@ -358,19 +402,25 @@ export class ReadWriteController{
                 where: { ino },
                 relations: ['owner', 'group', 'paths']
             }) as File;
-            if (file === null)
+            if (file === null) {
+                console.log("[read] status 404: File not found");
                 return res.status(404).json({ error: 'File not found' });
-            if (!has_permissions(file, 0, user))
+            }
+            if (!has_permissions(file, 0, user)) {
+                console.log("[read] status 403: No permission");
                 return res.status(403).json({ error: 'You have not the permission to read the content the file ' + ino });
+            }
 
-            const fullFsPath = toFsPath(file.paths[0].path); // every path is valid, so we can take the first one
+            const fullFsPath = toFsPath(file.paths[0].path);
             if (!fullFsPath) {
+                console.log("[read] status 500: File path not found");
                 return res.status(500).json({ error: 'File path not found for inode ' + ino });
             }
             const fd = await fsNode.open(fullFsPath, 'r');
             try {
                 const buffer = Buffer.alloc(size);
                 const { bytesRead } = await fd.read(buffer, 0, size, offset);
+                console.log("[read] status 200: Read finished, bytesRead:", bytesRead);
                 res.status(200);
                 res.setHeader('Content-Type', 'application/octet-stream');
                 res.setHeader('Content-Length', String(bytesRead));
@@ -380,9 +430,12 @@ export class ReadWriteController{
             }
 
         } catch (err: any) {
+            console.error('[read] Error:', err);
             if (err.code === 'ENOENT') {
+                console.log("[read] status 404: File not found");
                 res.status(404).json({ error: 'File not found' });
             } else if (err.code === 'EACCES') {
+                console.log("[read] status 403: Access denied");
                 res.status(403).json({ error: 'Access denied' });
             } else {
                 res.status(500).json({ error: 'Not possible to read the inode ' + ino, details: err });
