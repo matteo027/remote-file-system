@@ -81,7 +81,7 @@ fn map_error(error: &BackendError) -> FspError {
         },
         BackendError::Other(err) => {
             eprintln!("Backend error: {}", err);
-            FspError::IO(ErrorKind::Other)
+            FspError::IO(ErrorKind::InvalidData) 
         },
     }
 }
