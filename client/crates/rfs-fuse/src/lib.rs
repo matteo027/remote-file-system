@@ -106,6 +106,7 @@ enum ReadMode{
 }
 
 pub struct RemoteFS<B: RemoteBackend> {
+    mounting_point: String,
     backend: B,
     rt: Arc<Runtime>, // runtime per eseguire le operazioni asincrone
 
@@ -123,8 +124,9 @@ pub struct RemoteFS<B: RemoteBackend> {
 }
 
 impl<B: RemoteBackend> RemoteFS<B> {
-    pub fn new(backend: B,runtime: Arc<Runtime>,speed_testing: bool,speed_file: Option<File>) -> Self {
+    pub fn new(mounting_point: String, backend: B,runtime: Arc<Runtime>,speed_testing: bool,speed_file: Option<File>) -> Self {
         Self {
+            mounting_point,
             backend,
             rt: runtime,
             dir_parent: HashMap::new(),
@@ -711,7 +713,23 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
     fn symlink(&mut self, req: &Request<'_>, parent: u64, name: &OsStr, link: &Path, reply: ReplyEntry) {
         let timer_start = Instant::now();
 
-        let entry = match self.backend.symlink(&link.to_string_lossy(), parent, &name.to_string_lossy()) {
+        let mount_root = self.mounting_point.clone();
+        let link_str = link.to_string_lossy();
+
+        let target_path = if link_str.starts_with(&mount_root) {
+            let rel = &link_str[mount_root.len()..];
+            if rel.starts_with('/') {
+                rel.to_owned()
+            } else {
+                format!("/{}", rel)
+            }
+        } else {
+            link_str.into_owned()
+        };
+
+        println!("Sending: symlink creation request for target path: {} (retreived from {})", target_path, link.display());
+
+        let entry = match self.backend.symlink(&target_path, parent, &name.to_string_lossy()) {
             Ok(entry) => entry,
             Err(e) => {
                 reply.error(map_error(&e));
@@ -736,13 +754,21 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
         let timer_start = Instant::now();
 
         let target: String = match self.backend.readlink(ino) {
-            Ok(p) => p,
+            Ok(p) => {
+                let mount_root = self.mounting_point.clone();
+                if p.starts_with("/") {
+                    Path::new(&(mount_root + &p)).to_string_lossy().into_owned()
+                } else {
+                    p
+                }
+            },
             Err(e) => {
                 reply.error(map_error(&e));
                 return;
             }
         };
 
+        println!("Resolved readlink for ino {}: {}", ino, target);
         reply.data(target.as_bytes());
 
         if self.speed_testing {

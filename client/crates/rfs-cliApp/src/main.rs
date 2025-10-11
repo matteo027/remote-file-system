@@ -5,7 +5,7 @@ use tokio::runtime::{Builder,Runtime};
 
 // ---------- Costanti OS-specifiche ----------
 #[cfg(target_os = "linux")]
-const DEFAULT_MOUNT: &str = "/home/andrea/mnt/remote";
+const DEFAULT_MOUNT: &str = "/home/matteo/mnt/remote";
 #[cfg(target_os = "macos")]
 const DEFAULT_MOUNT: &str = "/Volumes/Remote-FS"; //?DA CONTROLLARE
 #[cfg(target_os = "windows")]
@@ -23,7 +23,7 @@ struct Cli {
     remote_address: String,
 
     /// Abilita la modalità speed testing (solo Unix)
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(short, long, action = ArgAction::SetTrue)]
     speed_testing: bool,
 }
 
@@ -107,14 +107,14 @@ fn run_unix(cli: Cli, http_backend: HttpBackend, runtime: Arc<Runtime>){
     use rfs_cache::Cache;
 
     let file_speed= if cli.speed_testing {
-        println!("Speed testing mode enabled.");
+        println!("Speed testing mode enabled. See /tmp/remote-fs.speed-test.out for details.");
         Some(File::create("/tmp/remote-fs.speed-test.out").expect("Failed to create speed test log file"))
     }else{
         None
     };
 
     let cache = Cache::new(http_backend, 256, 16, 64, 16); // 256 attr, 16 dir, 64 blocchi per file (da 16 Kb), 16 file
-    let fs = RemoteFS::new(cache, runtime.clone(), cli.speed_testing, file_speed);
+    let fs = RemoteFS::new(cli.mount_point.clone(), cache, runtime.clone(), cli.speed_testing, file_speed);
     let options = vec![MountOption::FSName("Remote-FS".to_string()), MountOption::RW];
     let mut session= Session::new(fs, &cli.mount_point, &options).expect("failed to mount");
 

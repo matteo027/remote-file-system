@@ -448,6 +448,9 @@ export class FileController {
         const dirLinkIno = parseIno(req.body.linkParentIno);
         const linkName = (req.body.linkName) as string | "";
 
+        const fsRoot = process.env.FS_ROOT || './file-system';
+            if (targetPath.startsWith('/')) targetPath = fsRoot.replace(/\/$/, '') + targetPath;
+
         if(!dirLinkIno){
             console.log("Missing link parent inode");
             return res.status(400).json({ error: "EINVAL", message: "Parent link missing" });
@@ -463,7 +466,6 @@ export class FileController {
         }
 
         try{
-            
             const dirLink = await fileRepo.findOne({
                 where:{ ino: dirLinkIno },
                 relations:["owner", "group", "paths"]
@@ -475,7 +477,6 @@ export class FileController {
                 console.log("Link parent is not a directory");
                 return res.status(400).json({ error: "ENOTDIR", message: "Link parent is not a directory" });
             }
-
 
             if(!has_permissions(dirLink,1,user)){
                 console.log("No permission to create in the link parent");
@@ -544,7 +545,12 @@ export class FileController {
             }
             
             const linkFsPath = toFsPath(slink.paths[0].path); // every path is valid, so we can take the first one
-            const target = await fs.readlink(linkFsPath);
+            let target = await fs.readlink(linkFsPath);
+            const fsRoot = (process.env.FS_ROOT || './file-system').replace(/\/$/, '');
+            if (target.startsWith(fsRoot)) {
+                target = target.slice(fsRoot.length);
+                if (!target.startsWith('/')) target = '/' + target;
+            }
             console.log("READLINK: Symlink target:", target);
 
             console.log("[readlink] status 200: Symlink target returned");
