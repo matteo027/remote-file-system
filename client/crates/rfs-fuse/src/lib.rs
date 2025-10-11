@@ -727,8 +727,6 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             link_str.into_owned()
         };
 
-        println!("Sending: symlink creation request for target path: {} (retreived from {})", target_path, link.display());
-
         let entry = match self.backend.symlink(&target_path, parent, &name.to_string_lossy()) {
             Ok(entry) => entry,
             Err(e) => {
@@ -768,7 +766,6 @@ impl<B: RemoteBackend> Filesystem for RemoteFS<B> {
             }
         };
 
-        println!("Resolved readlink for ino {}: {}", ino, target);
         reply.data(target.as_bytes());
 
         if self.speed_testing {

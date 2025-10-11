@@ -551,8 +551,7 @@ export class FileController {
                 target = target.slice(fsRoot.length);
                 if (!target.startsWith('/')) target = '/' + target;
             }
-            console.log("READLINK: Symlink target:", target);
-
+            
             console.log("[readlink] status 200: Symlink target returned");
             return res.status(200).json({ target });
 
