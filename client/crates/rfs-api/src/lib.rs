@@ -83,7 +83,7 @@ impl Credentials {
         print!("username: ");
         stdout().flush().ok();
         stdin().read_line(&mut username).expect("Failed to read username");
-        let username = username.trim().to_owned();
+        username = username.trim().to_owned();
 
         print!("password: ");
         stdout().flush().ok();
@@ -98,7 +98,7 @@ impl Credentials {
             let resp = match rt.block_on(async {client.post(login_url.clone()).json(&serde_json::json!({ "username": username, "password": password })).send().await}) {
                 Ok(r) => r,
                 Err(e) => {
-                    // server non raggiungibile / timeout / DNS / connessione
+                    // server not reachable / timeout / DNS / connection
                     if e.is_timeout() || e.is_connect() || e.is_request() {
                         eprintln!("[auth] Server not reachable: {e}, retrying...");
                         if attempts >= MAX_ATTEMPTS {
@@ -122,7 +122,11 @@ impl Credentials {
                     if attempts >= MAX_ATTEMPTS {
                         return Err("Too many invalid credentials (3 attempts)".to_string());
                     }
-                    // riprompt solo password
+                    username.clear();
+                    print!("username (retry): ");
+                    stdout().flush().ok();
+                    stdin().read_line(&mut username).expect("Failed to read username");
+                    username = username.trim().to_owned();
                     print!("password (retry): ");
                     stdout().flush().ok();
                     password = read_password().expect("Failed to read password");
