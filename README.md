@@ -1,277 +1,30 @@
+# Remote File System
+
+A remote filesystem implementation for Windows (using WinFSP), Linux (using fuser) and MacOS (using macFUSE), with a Node.js server backend and Rust client.
+
+Un'implementazione di filesystem remoto per Windows (usando WinFSP), Linux (usando fuser) e MacOS (usando macFUSE), con server backend Node.js e client Rust.
+
+---
+
 # ENGLISH
 
-# How to run it
+## How to run it
 
 Server: `npm run dev`
-Client: `cargo run -- -m /path/to/local/dir`
+Client: `cargo run -- -r /path/to/local/dir` for Unix systems, or your disk like `-r X:`, in case of Windows system
 
-# FileSystem API
+## FileSystem API
 
-All routes require authentication (middleware "isLoggedIn").
+All routes require authentication (middleware `isLoggedIn`).
 
+### Authentication
 
-## GET /api/directories/{*path}
-
-Description:
-Returns the list of folders and files contained in the directory indicated by the path.
-
-Parameters:
-- path (string): path relative to the remote root (example: "5000/projects").
-
-Request body:
-None
-
-**Response:**
-- List of items contained in the directory (files and folders).
-
-**Return type:**
-```json
-[
-  {
-    "path": "/5000/notes.txt",
-    "owner": 5000,
-    "group": 5000,
-    "permissions": 420,
-    "type": 0,
-    "size": 1024,
-    "atime": 1699999999999,
-    "mtime": 1699999999999,
-    "ctime": 1699999999999,
-    "btime": 1699999999999,
-  },
-  {
-    "path": "/5000/dir",
-    "owner": 5000,
-    "group": 5000,
-    "permissions": 420,
-    "type": 1,
-    "size": 1024,
-    "atime": 1399999999999,
-    "ctime": 1399999999999,
-    "ctime": 1399999999999,
-    "btime": 1399999999999,
-  }
-]
-```
-
----
-
-## GET /api/files/{*path}
-
-Description:
-Returns the metadata of the file or directory specified by the path.
-
-Parameters:
-- path (string): path relative to the remote file or directory.
-
-Request body:
-None
-
-**Response:**
-- Metadata for the requested file or directory.
-
-**Return type:**
-```json
-{
-  "path": "/5000/notes.txt",
-  "owner": 5000,
-  "group": 5000,
-  "permissions": 420,
-  "type": 0,
-  "size": 1024,
-  "atime": 1699999999999,
-  "mtime": 1699999999999,
-  "ctime": 1699999999999,
-  "btime": 1699999999999,
-}
-```
-
----
-
-## POST /api/files/{*path}
-
-**Description:**  
-Updates the metadata of the file or directory indicated by the path.
-
-**Parameters:**  
-- `path` (string): path relative to the remote file or directory.
-
-**Request body:**  
-```json
-{
-  "name": "new_name",          // optional, string
-  "perm": 493                   // optional, integer (permissions)
-}
-```
-
----
-
-## DELETE /api/files/{*path}
-
-**Description:**  
-Deletes the file or directory specified by the path.
-
-**Parameters:**  
-- `path` (string): relative path of the file or directory to be deleted.
-
-**Response:**  
-Confirmation of deletion.
-
-**Return type:**  
-```json
-{
-  "success": true,
-  "message": "File or directory successfully deleted."
-}
-```
-
----
-
-## PATCH /api/files/{*path}
-
-**Description:**  
-Renames a file or directory.
-
-**URL parameters:**
-- `path` (string): path of the file/directory to be renamed.
-
-**Request body (JSON):**
-```json
-{
-  "new_path": "/new/path/of/the/file"
-}
-```
-
-**Returns:**
-Updated metadata of the renamed file or directory.
-
-**Return type (JSON):**
-
-```json
-{
-  "path": "/new/path/of/the/file",
-  "owner": 1000,
-  "group": 1000,
-  "permissions": 493,
-  "type": 0,
-  "size": 2048,
-  "atime": 1699999999999,
-  "mtime": 1699999999999,
-  "ctime": 1699999999999,
-  "btime": 1699999999999
-}
-```
-
----
-
-## PUT /api/files/{*path}
-
-**Description:**
-Writes binary or text content to a file, starting from an offset.
-
-**URL parameters**
-- `path` (in path): relative path
-
-**URL parameters**
-- `path` (in the path): relative path of the file to be written.
-
-**Supported headers**
-- `X-Chunk-Offset` (optional): position (offset in bytes) from which to start writing. Default: 0.
-
-Binary content (stream) of the file to be written.
-
-**Returns:**  
-The number of bytes written successfully.
-
-**Return type**
-```json
-{
-  "bytes": 1024
-}
-```
-
----
-
-## GET /api/files/attributes/{*path}
-
-**Description:**
-Returns the metadata of a file or directory.
-
-**URL parameters:**
-- `path` (in the path): the relative path of the file or directory (e.g., /5000/documents/text.txt)
-
-**Body:**  
-(none)
-
-**Returns:**  
-File or directory metadata.
-
-**Return type (JSON):**
-```json
-{
-  "path": "/documents/text.txt",
-  "type": 0,
-  "permissions": 420,
-  "owner": 1000,
-  "group": 1000,
-  "atime": 1690963200000,
-  "mtime": 1690963200000,
-  "ctime": 1690963200000,
-  "btime": 1690963200000,
-  "size": 1245
-}
-```
-
----
-
-## PATCH /api/files/attributes/{*path}
-
-**Description:**  
-Updates one or more attributes of a file or directory, such as permissions (`perm`) or size (`size`).  
-Properties such as `uid` or `gid` cannot be modified.
-
-**URL parameters:**
-- `path` (in path): the relative path of the file or directory (e.g., /5000/documents/text.txt)
-
-**Body (JSON):**
-- `perm`: (optional) new permissions in octal format (e.g., 644)
-- `size`: (optional) new file size (for files only)
-- `uid` / `gid`: ignored, cannot be modified
-
-```json
-{
-  "perm": 644,
-  "size": 1000
-}
-```
-
-**Returns:**
-Updated metadata for the file or directory.
-
-**Return type (JSON):**
-```json
-{
-  "path": "/documents/text.txt",
-  "type": 0,
-  "permissions": 420,
-  "owner": 1000,
-  "group": 1000,
-  "atime": 1690963200000,
-  "mtime": 1691505600000,
-  "ctime": 1691505600000,
-  "btime": 1690963200000,
-  "size": 1000
-}
-```
-
----
-
-## POST /api/login
+#### POST /api/login
 
 **Description:**  
 Log in with local authentication (session).
 
-**Request body (form-urlencoded or JSON):**
+**Request body (JSON):**
 ```json
 {
   "uid": 5000,
@@ -289,26 +42,23 @@ Authenticated user ID.
 
 ---
 
-## POST /api/logout
+#### POST /api/logout
 
 **Description:**  
 Ends the active user session.
 
-**Body:**  
-(none)
+**Body:** None
 
-**Returns:**  
-Status `200 OK` without content.
+**Returns:** Status `200 OK` without content.
 
 ---
 
-## GET /api/me
+#### GET /api/me
 
 **Description:**  
 Returns the data of the currently authenticated user.
 
-**Body:**  
-(none)
+**Body:** None
 
 **Returns:**  
 Authenticated user data.
@@ -316,228 +66,269 @@ Authenticated user data.
 **Return type (JSON):**
 ```json
 {
-  "uid": 5000,
+  "uid": 5000
 }
 ```
-
-## GET /api/signup
-
-**Description:**  
-Allows the admin (uid: 5000) to create a new user. The user writes the uid and password of the user to be registered in the `/create-user.txt` file, separated by a space.
-**Request body:**
-```json
-{
-  "uid": 5001,
-  "password": "password"
-}
-```
-
-**Returns:**  
-(none)
-
-## GET /api/group
-
-**Description:**  
-Allows the admin (uid: 5000) to associate a user with a (new) group. The user writes the user's uid and the gid of the group to be associated in the `/create-group.txt` file, separated by a space.
-
-**Request body:**
-```json
-{
-  "uid": 5000,
-  "gid": 6000
-}
-```
-
-**Returns:**  
-(none)
-
-Translated with DeepL.com (free version)
 
 ---
 
-# ITALIANO
+### File and Directory Attributes
 
-# Come eseguirlo
+#### GET /api/files/{ino}/attributes
 
-Server: `npm run dev`
-Client: `cargo run -- -m /path/to/local/dir`
+**Description:**
+Returns the metadata of a file or directory by inode number.
 
-# API del FileSystem
+**URL parameters:**
+- `ino` (string): inode number of the file or directory
 
-Tutte le rotte richiedono autenticazione (middleware `isLoggedIn`).
+**Body:** None
 
+**Returns:**  
+File or directory metadata.
 
-## GET /api/directories/{*path}
+**Return type (JSON):**
+```json
+{
+  "ino": "12345",
+  "name": "example.txt",
+  "kind": 0,
+  "size": 1245,
+  "uid": 1000,
+  "gid": 1000,
+  "perm": 420,
+  "atime": 1690963200000,
+  "mtime": 1690963200000,
+  "ctime": 1690963200000,
+  "btime": 1690963200000
+}
+```
 
-**Descrizione:**  
-Restituisce la lista di cartelle e file contenuti nella directory indicata dal path.
+---
 
-**Parametri:**  
-- `path` (string): percorso relativo alla root remota (esempio: `5000/progetti`)
+#### PATCH /api/files/{ino}/attributes
 
-**Corpo della richiesta:**  
-Nessuno
+**Description:**  
+Updates one or more attributes of a file or directory, such as permissions or size.
 
-**Risposta:**  
-Lista degli elementi contenuti nella directory (file e cartelle).
+**URL parameters:**
+- `ino` (string): inode number of the file or directory
 
-**Tipo di ritorno:**  
+**Body (JSON):**
+```json
+{
+  "perm": 644,
+  "size": 1000
+}
+```
+
+**Returns:**
+Updated metadata for the file or directory.
+
+---
+
+### Directory Operations
+
+#### GET /api/directories/{parentIno}/entries/lookup
+
+**Description:**  
+Looks up a specific entry in a directory by name.
+
+**URL parameters:**
+- `parentIno` (string): inode number of the parent directory
+
+**Query parameters:**
+- `name` (string): name of the file or directory to lookup
+
+**Returns:**
+Metadata of the found entry.
+
+**Return type (JSON):**
+```json
+{
+  "ino": "12345",
+  "name": "example.txt",
+  "kind": 0,
+  "size": 1024,
+  "uid": 5000,
+  "gid": 5000,
+  "perm": 420,
+  "atime": 1699999999999,
+  "mtime": 1699999999999,
+  "ctime": 1699999999999,
+  "btime": 1699999999999
+}
+```
+
+---
+
+#### GET /api/directories/{ino}/entries
+
+**Description:**  
+Returns the list of files and directories contained in a directory.
+
+**URL parameters:**
+- `ino` (string): inode number of the directory
+
+**Body:** None
+
+**Returns:**  
+List of entries in the directory.
+
+**Return type (JSON):**
 ```json
 [
   {
-    "path": "/5000/notes.txt",
-    "owner": 5000,
-    "group": 5000,
-    "permissions": 420,
-    "type": 0,
+    "ino": "12345",
+    "name": "notes.txt",
+    "kind": 0,
     "size": 1024,
+    "uid": 5000,
+    "gid": 5000,
+    "perm": 420,
     "atime": 1699999999999,
     "mtime": 1699999999999,
     "ctime": 1699999999999,
     "btime": 1699999999999
   },
   {
-    "path": "/5000/dir",
-    "owner": 5000,
-    "group": 5000,
-    "permissions": 420,
-    "type": 1,
-    "size": 1024,
+    "ino": "67890",
+    "name": "documents",
+    "kind": 1,
+    "size": 4096,
+    "uid": 5000,
+    "gid": 5000,
+    "perm": 755,
     "atime": 1399999999999,
     "mtime": 1399999999999,
     "ctime": 1399999999999,
     "btime": 1399999999999
-  },
+  }
 ]
 ```
 
 ---
 
-## GET /api/files/{*path}
+### File and Directory Creation/Deletion
 
-**Descrizione:**  
-Restituisce i metadati del file o directory indicata dal path.
+#### POST /api/directories/{parentIno}/dirs/{name}
 
-**Parametri:**  
-- `path` (string): percorso relativo al file o directory remoto.
+**Description:**  
+Creates a new directory.
 
-**Corpo della richiesta:**  
-Nessuno
+**URL parameters:**
+- `parentIno` (string): inode number of the parent directory
+- `name` (string): name of the new directory
 
-**Risposta:**  
-Metadati del file o directory richiesto.
-
-**Tipo di ritorno:**  
-```json
-{
-  "path": "/5000/appunti.txt",
-  "owner": 5000,
-  "group": 5000,
-  "permissions": 420,
-  "type": 0,
-  "size": 1024,
-  "atime": 1699999999999,
-  "mtime": 1699999999999,
-  "ctime": 1699999999999,
-  "btime": 1699999999999
-}
-```
+**Returns:**
+Metadata of the created directory.
 
 ---
 
-## POST /api/files/{*path}
+#### DELETE /api/directories/{parentIno}/dirs/{name}
 
-**Descrizione:**  
-Aggiorna i metadati del file o directory indicata dal path.
+**Description:**  
+Deletes a directory.
 
-**Parametri:**  
-- `path` (string): percorso relativo al file o directory remoto.
+**URL parameters:**
+- `parentIno` (string): inode number of the parent directory
+- `name` (string): name of the directory to delete
 
-**Corpo della richiesta:**  
-```json
-{
-  "name": "nuovo_nome",          // opzionale, string
-  "perm": 493                   // opzionale, intero (permessi)
-}
-```
+**Returns:**
+Confirmation of deletion.
 
 ---
 
-## DELETE /api/files/{*path}
+#### POST /api/directories/{parentIno}/files/{name}
 
-**Descrizione:**  
-Elimina il file o la directory specificata dal percorso.
+**Description:**  
+Creates a new file.
 
-**Parametri:**  
-- `path` (string): percorso relativo del file o directory da eliminare.
+**URL parameters:**
+- `parentIno` (string): inode number of the parent directory
+- `name` (string): name of the new file
 
-**Risposta:**  
-Conferma dell'eliminazione.
-
-**Tipo di ritorno:**  
-```json
-{
-  "success": true,
-  "message": "File o directory eliminata con successo."
-}
-```
+**Returns:**
+Metadata of the created file.
 
 ---
 
-## PATCH /api/files/{*path}
+#### DELETE /api/directories/{parentIno}/files/{name}
 
-**Descrizione:**  
-Rinomina un file o una directory.
+**Description:**  
+Deletes a file.
 
-**Parametri URL:**
-- `path` (string): percorso del file/directory da rinominare.
+**URL parameters:**
+- `parentIno` (string): inode number of the parent directory
+- `name` (string): name of the file to delete
 
-**Corpo della richiesta (JSON):**
-```json
-{
-  "new_path": "/nuovo/percorso/del/file"
-}
-```
-
-**Ritorna:**
-Metadati aggiornati del file o della directory rinominata.
-
-**Tipo di ritorno (JSON):**
-
-```json
-{
-  "path": "/nuovo/percorso/del/file",
-  "owner": 1000,
-  "group": 1000,
-  "permissions": 493,
-  "type": 0,
-  "size": 2048,
-  "atime": 1699999999999,
-  "mtime": 1699999999999,
-  "ctime": 1699999999999,
-  "btime": 1699999999999
-}
-```
+**Returns:**
+Confirmation of deletion.
 
 ---
 
-## PUT /api/files/{*path}
+### Rename Operations
 
-**Descrizione:**
-Scrive contenuti binari o testuali su un file, a partire da un offset.
+#### PATCH /api/directories/{oldParentIno}/entries/{oldName}
 
-**Parametri URL**
-- `path` (nel percorso): path relativo del file da scrivere.
+**Description:**  
+Renames or moves a file or directory.
 
-**Headers supportati**
-- `X-Chunk-Offset` (opzionale): posizione (offset in byte) da cui iniziare a scrivere. Default: 0.
+**URL parameters:**
+- `oldParentIno` (string): inode number of the old parent directory
+- `oldName` (string): current name of the file/directory
 
-Contenuto binario (stream) del file da scrivere.
+**Body (JSON):**
+```json
+{
+  "newParentIno": "67890",
+  "newName": "new_filename.txt"
+}
+```
 
-**Ritorna:**  
-Il numero di byte scritti correttamente.
+**Returns:**
+Updated metadata of the renamed/moved entry.
 
-**Tipo di ritorno**
+---
+
+### File Read/Write Operations
+
+#### GET /api/files/{ino}
+
+**Description:**
+Reads the contents of a file.
+
+**URL parameters:**
+- `ino` (string): inode number of the file
+
+**Query parameters:**
+- `offset` (optional): byte offset to start reading from
+- `size` (optional): number of bytes to read
+
+**Returns:**
+File contents as binary data.
+
+---
+
+#### PUT /api/files/{ino}
+
+**Description:**
+Writes binary content to a file.
+
+**URL parameters:**
+- `ino` (string): inode number of the file
+
+**Headers:**
+- `Content-Type: application/octet-stream`
+- `X-Chunk-Offset` (optional): byte offset to start writing from
+
+**Body:**
+Binary content to write.
+
+**Returns:**
+Number of bytes written.
+
+**Return type (JSON):**
 ```json
 {
   "bytes": 1024
@@ -546,94 +337,196 @@ Il numero di byte scritti correttamente.
 
 ---
 
-## GET /api/files/attributes/{*path}
+#### GET /api/files/stream/{ino}
 
-**Descrizione:**
-Restituisce i metadati di un file o directory.
+**Description:**
+Streams file contents for large files.
 
-**Parametri URL:**
-- `path` (nel percorso): il path relativo del file o directory (es. /5000/documenti/testo.txt)
+**URL parameters:**
+- `ino` (string): inode number of the file
 
-**Corpo:**  
-(nessuno)
+**Returns:**
+File contents as a stream.
 
-**Ritorna:**  
-Metadati del file o directory.
+---
 
-**Tipo di ritorno (JSON):**
+#### PUT /api/files/stream/{ino}
+
+**Description:**
+Streams binary content to a file for large uploads.
+
+**URL parameters:**
+- `ino` (string): inode number of the file
+
+**Body:**
+Binary stream to write.
+
+**Returns:**
+Upload confirmation.
+
+---
+
+### Link Operations
+
+#### POST /api/links/{targetIno}
+
+**Description:**  
+Creates a hard link to an existing file.
+
+**URL parameters:**
+- `targetIno` (string): inode number of the target file
+
+**Body (JSON):**
 ```json
 {
-  "path": "/documenti/testo.txt",
-  "type": 0,
-  "permissions": 420,
-  "owner": 1000,
-  "group": 1000,
-  "atime": 1690963200000,
-  "mtime": 1690963200000,
-  "ctime": 1690963200000,
-  "btime": 1690963200000,
-  "size": 1245
+  "linkParentIno": "12345",
+  "linkName": "link_name"
+}
+```
+
+**Returns:**
+Metadata of the created hard link.
+
+---
+
+#### POST /api/symlinks
+
+**Description:**  
+Creates a symbolic link.
+
+**Body (JSON):**
+```json
+{
+  "linkParenIno": "12345",
+  "linkName": "symlink_name",
+  "targetPath": "/path/to/target"
+}
+```
+
+**Returns:**
+Metadata of the created symbolic link.
+
+---
+
+#### GET /api/symlinks/{ino}
+
+**Description:**  
+Reads the target path of a symbolic link.
+
+**URL parameters:**
+- `ino` (string): inode number of the symbolic link
+
+**Returns:**
+Target path of the symbolic link.
+
+**Return type (JSON):**
+```json
+{
+  "target": "/path/to/target"
 }
 ```
 
 ---
 
-## PATCH /api/files/attributes/{*path}
+### System Information
 
-**Descrizione:**  
-Aggiorna uno o più attributi di un file o directory, come permessi (`perm`) o dimensione (`size`).  
-Non è consentito modificare proprietà come `uid` o `gid`.
+#### GET /api/size
 
-**Parametri URL:**
-- `path` (nel percorso): il path relativo del file o directory (es. /5000/documenti/testo.txt)
+**Description:**  
+Returns filesystem size information (used by Windows systems only!).
 
-**Corpo (JSON):**
-- `perm`: (opzionale) nuovi permessi in formato ottale (es. 644)
-- `size`: (opzionale) nuova dimensione del file (solo per file)
-- `uid` / `gid`: ignorati, non modificabili
+**Body:** None
 
+**Returns:**
+Total and available space information.
+
+**Return type (JSON):**
 ```json
 {
-  "perm": 644,
-  "size": 1000
-}
-```
-
-**Ritorna:**
-Metadati aggiornati del file o directory.
-
-**Tipo di ritorno (JSON):**
-```json
-{
-  "path": "/documenti/testo.txt",
-  "type": 0,
-  "permissions": 420,
-  "owner": 1000,
-  "group": 1000,
-  "atime": 1690963200000,
-  "mtime": 1691505600000,
-  "ctime": 1691505600000,
-  "btime": 1690963200000,
-  "size": 1000
+  "total": 107374182400,
+  "available": 85899345920
 }
 ```
 
 ---
 
-## POST /api/login
+### Data Types
+
+#### File Entry Types
+- `0`: Regular file
+- `1`: Directory  
+- `2`: Symbolic link
+
+#### Permissions
+Unix-style octal permissions (e.g., `755`, `644`, `420`)
+
+#### Timestamps
+All timestamps are in milliseconds since Unix epoch (JavaScript `Date.now()` format)
+
+---
+
+### Error Responses
+
+All endpoints may return the following error responses:
+
+**401 Unauthorized:**
+```json
+{
+  "error": "Authentication required"
+}
+```
+
+**403 Forbidden:**
+```json
+{
+  "error": "Permission denied"
+}
+```
+
+**404 Not Found:**
+```json
+{
+  "error": "File or directory not found"
+}
+```
+
+**500 Internal Server Error:**
+```json
+{
+  "error": "Internal server error",
+  "details": "Error message"
+}
+```
+
+---
+
+# ITALIANO
+
+## Come eseguirlo
+
+Server: `npm run dev`
+Client: `cargo run -- -r /path/to/local/dir` per sistemi Unix, oppure il tuo disco come `-r X:`, nel caso di sistemi Windows
+
+## API FileSystem
+
+Tutte le route richiedono autenticazione (middleware `isLoggedIn`).
+
+### Autenticazione
+
+#### POST /api/login
 
 **Descrizione:**  
-Effettua il login con autenticazione locale (sessione).
+Accedi con autenticazione locale (sessione).
 
-**Corpo della richiesta (form-urlencoded o JSON):**
+**Corpo della richiesta (JSON):**
 ```json
 {
   "uid": 5000,
-  "password": "la-tua-password"
+  "password": "tua-password"
 }
 ```
 
-**Ritorna:**
+**Restituisce:**
 ID utente autenticato.
 
 **Tipo di ritorno (JSON):**
@@ -643,67 +536,458 @@ ID utente autenticato.
 
 ---
 
-## POST /api/logout
+#### POST /api/logout
 
 **Descrizione:**  
 Termina la sessione utente attiva.
 
-**Corpo:**  
-(nessuno)
+**Corpo:** Nessuno
 
-**Ritorna:**  
-Status `200 OK` senza contenuto.
+**Restituisce:** Status `200 OK` senza contenuto.
 
 ---
 
-## GET /api/me
+#### GET /api/me
 
 **Descrizione:**  
-Ritorna i dati dell’utente attualmente autenticato.
+Restituisce i dati dell'utente attualmente autenticato.
 
-**Corpo:**  
-(nessuno)
+**Corpo:** Nessuno
 
-**Ritorna:**  
-Dati utente autenticato.
+**Restituisce:**  
+Dati dell'utente autenticato.
 
 **Tipo di ritorno (JSON):**
 ```json
 {
-  "uid": 5000,
+  "uid": 5000
 }
 ```
-
-## GET /api/signup
-
-**Descrizione:**  
-Consente all'admin (uid: 5000) la creazione di un nuovo utente. L'utente scrive nel file `/create-user.txt` lo uid e la password dell'utente da registrare., spearati da spazio
-
-**Corpo della richiesta:**
-```json
-{
-  "uid": 5001,
-  "password": "password"
-}
-```
-
-**Restituisce:**  
-(niente)
-
-## GET /api/group
-
-**Descrizione:**  
-Consente all'admin (uid: 5000) l'associazione di un utente a un (nuovo) gruppo. L'utente scrive nel file `/create-group.txt` lo uid dell'utente e il gid del gruppo da associare, separati da spazio.
-
-**Corpo della richiesta:**
-```json
-{
-  "uid": 5000,
-  "gid": 6000
-}
-```
-
-**Restituisce:**  
-(niente)
 
 ---
+
+### Attributi di File e Directory
+
+#### GET /api/files/{ino}/attributes
+
+**Descrizione:**
+Restituisce i metadati di un file o directory tramite numero inode.
+
+**Parametri URL:**
+- `ino` (string): numero inode del file o directory
+
+**Corpo:** Nessuno
+
+**Restituisce:**  
+Metadati del file o directory.
+
+**Tipo di ritorno (JSON):**
+```json
+{
+  "ino": "12345",
+  "name": "esempio.txt",
+  "kind": 0,
+  "size": 1245,
+  "uid": 1000,
+  "gid": 1000,
+  "perm": 420,
+  "atime": 1690963200000,
+  "mtime": 1690963200000,
+  "ctime": 1690963200000,
+  "btime": 1690963200000
+}
+```
+
+---
+
+#### PATCH /api/files/{ino}/attributes
+
+**Descrizione:**  
+Aggiorna uno o più attributi di un file o directory, come permessi o dimensione.
+
+**Parametri URL:**
+- `ino` (string): numero inode del file o directory
+
+**Corpo (JSON):**
+```json
+{
+  "perm": 644,
+  "size": 1000
+}
+```
+
+**Restituisce:**
+Metadati aggiornati per il file o directory.
+
+---
+
+### Operazioni su Directory
+
+#### GET /api/directories/{parentIno}/entries/lookup
+
+**Descrizione:**  
+Cerca una voce specifica in una directory per nome.
+
+**Parametri URL:**
+- `parentIno` (string): numero inode della directory padre
+
+**Parametri Query:**
+- `name` (string): nome del file o directory da cercare
+
+**Restituisce:**
+Metadati della voce trovata.
+
+**Tipo di ritorno (JSON):**
+```json
+{
+  "ino": "12345",
+  "name": "esempio.txt",
+  "kind": 0,
+  "size": 1024,
+  "uid": 5000,
+  "gid": 5000,
+  "perm": 420,
+  "atime": 1699999999999,
+  "mtime": 1699999999999,
+  "ctime": 1699999999999,
+  "btime": 1699999999999
+}
+```
+
+---
+
+#### GET /api/directories/{ino}/entries
+
+**Descrizione:**  
+Restituisce l'elenco di file e directory contenuti in una directory.
+
+**Parametri URL:**
+- `ino` (string): numero inode della directory
+
+**Corpo:** Nessuno
+
+**Restituisce:**  
+Elenco delle voci nella directory.
+
+**Tipo di ritorno (JSON):**
+```json
+[
+  {
+    "ino": "12345",
+    "name": "note.txt",
+    "kind": 0,
+    "size": 1024,
+    "uid": 5000,
+    "gid": 5000,
+    "perm": 420,
+    "atime": 1699999999999,
+    "mtime": 1699999999999,
+    "ctime": 1699999999999,
+    "btime": 1699999999999
+  },
+  {
+    "ino": "67890",
+    "name": "documenti",
+    "kind": 1,
+    "size": 4096,
+    "uid": 5000,
+    "gid": 5000,
+    "perm": 755,
+    "atime": 1399999999999,
+    "mtime": 1399999999999,
+    "ctime": 1399999999999,
+    "btime": 1399999999999
+  }
+]
+```
+
+---
+
+### Creazione/Eliminazione di File e Directory
+
+#### POST /api/directories/{parentIno}/dirs/{name}
+
+**Descrizione:**  
+Crea una nuova directory.
+
+**Parametri URL:**
+- `parentIno` (string): numero inode della directory padre
+- `name` (string): nome della nuova directory
+
+**Restituisce:**
+Metadati della directory creata.
+
+---
+
+#### DELETE /api/directories/{parentIno}/dirs/{name}
+
+**Descrizione:**  
+Elimina una directory.
+
+**Parametri URL:**
+- `parentIno` (string): numero inode della directory padre
+- `name` (string): nome della directory da eliminare
+
+**Restituisce:**
+Conferma dell'eliminazione.
+
+---
+
+#### POST /api/directories/{parentIno}/files/{name}
+
+**Descrizione:**  
+Crea un nuovo file.
+
+**Parametri URL:**
+- `parentIno` (string): numero inode della directory padre
+- `name` (string): nome del nuovo file
+
+**Restituisce:**
+Metadati del file creato.
+
+---
+
+#### DELETE /api/directories/{parentIno}/files/{name}
+
+**Descrizione:**  
+Elimina un file.
+
+**Parametri URL:**
+- `parentIno` (string): numero inode della directory padre
+- `name` (string): nome del file da eliminare
+
+**Restituisce:**
+Conferma dell'eliminazione.
+
+---
+
+### Operazioni di Rinomina
+
+#### PATCH /api/directories/{oldParentIno}/entries/{oldName}
+
+**Descrizione:**  
+Rinomina o sposta un file o directory.
+
+**Parametri URL:**
+- `oldParentIno` (string): numero inode della vecchia directory padre
+- `oldName` (string): nome attuale del file/directory
+
+**Corpo (JSON):**
+```json
+{
+  "newParentIno": "67890",
+  "newName": "nuovo_nome_file.txt"
+}
+```
+
+**Restituisce:**
+Metadati aggiornati della voce rinominata/spostata.
+
+---
+
+### Operazioni di Lettura/Scrittura File
+
+#### GET /api/files/{ino}
+
+**Descrizione:**
+Legge il contenuto di un file.
+
+**Parametri URL:**
+- `ino` (string): numero inode del file
+
+**Parametri Query:**
+- `offset` (opzionale): offset in byte da cui iniziare la lettura
+- `size` (opzionale): numero di byte da leggere
+
+**Restituisce:**
+Contenuto del file come dati binari.
+
+---
+
+#### PUT /api/files/{ino}
+
+**Descrizione:**
+Scrive contenuto binario in un file.
+
+**Parametri URL:**
+- `ino` (string): numero inode del file
+
+**Headers:**
+- `Content-Type: application/octet-stream`
+- `X-Chunk-Offset` (opzionale): offset in byte da cui iniziare la scrittura
+
+**Corpo:**
+Contenuto binario da scrivere.
+
+**Restituisce:**
+Numero di byte scritti.
+
+**Tipo di ritorno (JSON):**
+```json
+{
+  "bytes": 1024
+}
+```
+
+---
+
+#### GET /api/files/stream/{ino}
+
+**Descrizione:**
+Trasmette il contenuto di file per file di grandi dimensioni.
+
+**Parametri URL:**
+- `ino` (string): numero inode del file
+
+**Restituisce:**
+Contenuto del file come stream.
+
+---
+
+#### PUT /api/files/stream/{ino}
+
+**Descrizione:**
+Trasmette contenuto binario a un file per upload di grandi dimensioni.
+
+**Parametri URL:**
+- `ino` (string): numero inode del file
+
+**Corpo:**
+Stream binario da scrivere.
+
+**Restituisce:**
+Conferma dell'upload.
+
+---
+
+### Operazioni sui Link
+
+#### POST /api/links/{targetIno}
+
+**Descrizione:**  
+Crea un hard link a un file esistente.
+
+**Parametri URL:**
+- `targetIno` (string): numero inode del file target
+
+**Corpo (JSON):**
+```json
+{
+  "linkParentIno": "12345",
+  "linkName": "nome_link"
+}
+```
+
+**Restituisce:**
+Metadati dell'hard link creato.
+
+---
+
+#### POST /api/symlinks
+
+**Descrizione:**  
+Crea un link simbolico.
+
+**Corpo (JSON):**
+```json
+{
+  "linkParenIno": "12345",
+  "linkName": "nome_symlink",
+  "targetPath": "/percorso/al/target"
+}
+```
+
+**Restituisce:**
+Metadati del link simbolico creato.
+
+---
+
+#### GET /api/symlinks/{ino}
+
+**Descrizione:**  
+Legge il percorso target di un link simbolico.
+
+**Parametri URL:**
+- `ino` (string): numero inode del link simbolico
+
+**Restituisce:**
+Percorso target del link simbolico.
+
+**Tipo di ritorno (JSON):**
+```json
+{
+  "target": "/percorso/al/target"
+}
+```
+
+---
+
+### Informazioni di Sistema
+
+#### GET /api/size
+
+**Descrizione:**  
+Restituisce informazioni sulla dimensione del filesystem (usato solo dai sistemi Windows!).
+
+**Corpo:** Nessuno
+
+**Restituisce:**
+Informazioni sullo spazio totale e disponibile.
+
+**Tipo di ritorno (JSON):**
+```json
+{
+  "total": 107374182400,
+  "available": 85899345920
+}
+```
+
+---
+
+### Tipi di Dati
+
+#### Tipi di Voce File
+- `0`: File regolare
+- `1`: Directory  
+- `2`: Link simbolico
+
+#### Permessi
+Permessi ottali in stile Unix (es. `755`, `644`, `420`)
+
+#### Timestamp
+Tutti i timestamp sono in millisecondi dall'epoca Unix (formato `Date.now()` di JavaScript)
+
+---
+
+### Risposte di Errore
+
+Tutti gli endpoint possono restituire le seguenti risposte di errore:
+
+**401 Unauthorized:**
+```json
+{
+  "error": "Autenticazione richiesta"
+}
+```
+
+**403 Forbidden:**
+```json
+{
+  "error": "Permesso negato"
+}
+```
+
+**404 Not Found:**
+```json
+{
+  "error": "File o directory non trovato"
+}
+```
+
+**500 Internal Server Error:**
+```json
+{
+  "error": "Errore interno del server",
+  "details": "Messaggio di errore"
+}
+```
